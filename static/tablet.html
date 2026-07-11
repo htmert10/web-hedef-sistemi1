@@ -30,8 +30,9 @@
           <button id="startBtn" class="primary">1. Kamera + mikrofonu aç</button>
           <button id="resetCornersBtn" disabled>2. Köşeleri sıfırla</button>
           <button id="referenceBtn" disabled class="ok">3. Temiz hedefi kaydet</button>
-          <button id="learnSoundBtn" disabled class="warn">4. Sesi öğret</button>
-          <button id="armBtn" disabled>5. Sistemi hazırla</button>
+          <button id="centerBtn" disabled class="warn">4. Hedef merkezini seç</button>
+          <button id="learnSoundBtn" disabled class="warn">5. Sesi öğret</button>
+          <button id="armBtn" disabled>6. Sistemi hazırla</button>
           <button id="testBtn" disabled>Test tetikle</button>
         </div>
 
@@ -63,7 +64,10 @@
 
         <h2 style="margin-top:18px">Düzeltilmiş hedef</h2>
         <canvas id="warpedPreview" class="preview-canvas" width="500" height="500"></canvas>
-        <p class="muted small">Şüpheli üst üste atışta bu hedefe dokunarak konumu elle seçebilirsin.</p>
+        <p class="muted small">
+          Temiz hedefi kaydettikten sonra “Hedef merkezini seç”e basıp 10 halkasının tam ortasına dokun.
+          Şüpheli üst üste atışta yine bu hedefe dokunarak konumu elle seçebilirsin.
+        </p>
 
         <div id="manualPanel" class="hidden">
           <div class="status warn">

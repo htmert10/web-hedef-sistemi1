@@ -14,6 +14,7 @@ const warpedCtx = warpedPreview.getContext("2d");
 const startBtn = document.getElementById("startBtn");
 const resetCornersBtn = document.getElementById("resetCornersBtn");
 const referenceBtn = document.getElementById("referenceBtn");
+const centerBtn = document.getElementById("centerBtn");
 const learnSoundBtn = document.getElementById("learnSoundBtn");
 const armBtn = document.getElementById("armBtn");
 const testBtn = document.getElementById("testBtn");
@@ -50,10 +51,54 @@ let localShots = [];
 let animationFrameId = null;
 let lastRawCaptureAt = 0;
 let softwareZoom = 1;
+let targetCenter = null;
+let centerSelectionMode = false;
 
 function setStatus(text, level = "") {
   statusBox.className = `status ${level}`.trim();
   statusBox.textContent = text;
+}
+
+function clamp01(value) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function toTargetCoordinates(paperX, paperY) {
+  const center = targetCenter || { x: 0.5, y: 0.5 };
+  return {
+    x: clamp01(0.5 + (paperX - center.x)),
+    y: clamp01(0.5 + (paperY - center.y))
+  };
+}
+
+function toPaperCoordinates(targetX, targetY) {
+  const center = targetCenter || { x: 0.5, y: 0.5 };
+  return {
+    x: clamp01(center.x + (targetX - 0.5)),
+    y: clamp01(center.y + (targetY - 0.5))
+  };
+}
+
+function drawTargetCenterMarker() {
+  if (!targetCenter) return;
+  const x = targetCenter.x * warpedPreview.width;
+  const y = targetCenter.y * warpedPreview.height;
+
+  warpedCtx.save();
+  warpedCtx.strokeStyle = "#ff3b6b";
+  warpedCtx.fillStyle = "rgba(255,59,107,.18)";
+  warpedCtx.lineWidth = 3;
+  warpedCtx.beginPath();
+  warpedCtx.arc(x, y, 13, 0, Math.PI * 2);
+  warpedCtx.fill();
+  warpedCtx.stroke();
+  warpedCtx.beginPath();
+  warpedCtx.moveTo(x - 22, y);
+  warpedCtx.lineTo(x + 22, y);
+  warpedCtx.moveTo(x, y - 22);
+  warpedCtx.lineTo(x, y + 22);
+  warpedCtx.stroke();
+  warpedCtx.restore();
 }
 
 function wsUrl() {
@@ -289,8 +334,11 @@ overlay.addEventListener("pointerdown", (event) => {
 function resetCorners() {
   corners = [];
   referenceFrame = null;
+  targetCenter = null;
+  centerSelectionMode = false;
   detectorArmed = false;
-  armBtn.textContent = "5. Sistemi hazırla";
+  centerBtn.disabled = true;
+  armBtn.textContent = "6. Sistemi hazırla";
   armBtn.disabled = true;
   manualPanel.classList.add("hidden");
   drawOverlay();
@@ -404,6 +452,7 @@ function previewWarp(rawFrame) {
   try {
     const warped = warpFrame(rawFrame);
     warpedCtx.putImageData(warped, 0, 0);
+    drawTargetCenterMarker();
     return warped;
   } catch (error) {
     setStatus(error.message, "danger");
@@ -416,8 +465,14 @@ function saveReference() {
   referenceFrame = previewWarp(raw);
   if (!referenceFrame) return;
 
-  armBtn.disabled = false;
-  setStatus("Temiz hedef referansı kaydedildi. Şimdi sesi öğret.", "ok");
+  targetCenter = null;
+  centerSelectionMode = false;
+  centerBtn.disabled = false;
+  armBtn.disabled = true;
+  setStatus(
+    "Temiz hedef kaydedildi. Şimdi hedef merkezini seç ve 10 halkasının tam ortasına dokun.",
+    "ok"
+  );
 }
 
 async function learnSound() {
@@ -445,13 +500,13 @@ async function learnSound() {
 }
 
 function toggleArm() {
-  if (!referenceFrame || corners.length !== 4) {
-    setStatus("Önce köşeleri seçip temiz hedefi kaydet.", "warn");
+  if (!referenceFrame || corners.length !== 4 || !targetCenter) {
+    setStatus("Önce köşeleri seç, temiz hedefi kaydet ve hedef merkezini işaretle.", "warn");
     return;
   }
 
   detectorArmed = !detectorArmed;
-  armBtn.textContent = detectorArmed ? "Sistemi durdur" : "5. Sistemi hazırla";
+  armBtn.textContent = detectorArmed ? "Sistemi durdur" : "6. Sistemi hazırla";
   armBtn.className = detectorArmed ? "danger" : "";
   setStatus(
     detectorArmed
@@ -609,8 +664,9 @@ function findOverlapSuggestion(before, after) {
 
   let best = null;
   for (const shot of localShots) {
-    const cx = shot.x * (CANONICAL_SIZE - 1);
-    const cy = shot.y * (CANONICAL_SIZE - 1);
+    const paperPoint = toPaperCoordinates(shot.x, shot.y);
+    const cx = paperPoint.x * (CANONICAL_SIZE - 1);
+    const cy = paperPoint.y * (CANONICAL_SIZE - 1);
     let sum = 0;
     let count = 0;
 
@@ -627,7 +683,7 @@ function findOverlapSuggestion(before, after) {
 
     const change = count ? sum / count : 0;
     if (!best || change > best.change) {
-      best = { x: shot.x, y: shot.y, change };
+      best = { x: paperPoint.x, y: paperPoint.y, change };
     }
   }
 
@@ -657,14 +713,16 @@ async function triggerShotPipeline() {
   const beforeWarped = warpFrame(beforeRaw);
   const afterWarped = warpFrame(afterRaw);
   warpedCtx.putImageData(afterWarped, 0, 0);
+  drawTargetCenterMarker();
 
   const candidate = findNewHole(beforeWarped, afterWarped);
 
   if (candidate) {
+    const targetPoint = toTargetCoordinates(candidate.x, candidate.y);
     send({
       type: "shot",
-      x: candidate.x,
-      y: candidate.y,
+      x: targetPoint.x,
+      y: targetPoint.y,
       confidence: candidate.confidence,
       status: "confirmed",
       source: "camera"
@@ -698,10 +756,11 @@ async function triggerShotPipeline() {
 }
 
 function sendManualShot(x, y, confidence = 0.35) {
+  const targetPoint = toTargetCoordinates(x, y);
   send({
     type: "shot",
-    x,
-    y,
+    x: targetPoint.x,
+    y: targetPoint.y,
     confidence,
     status: "suspect",
     source: "manual"
@@ -712,10 +771,27 @@ function sendManualShot(x, y, confidence = 0.35) {
 }
 
 warpedPreview.addEventListener("pointerdown", (event) => {
-  if (manualPanel.classList.contains("hidden")) return;
   const rect = warpedPreview.getBoundingClientRect();
-  const x = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
-  const y = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
+  const x = clamp01((event.clientX - rect.left) / rect.width);
+  const y = clamp01((event.clientY - rect.top) / rect.height);
+
+  if (centerSelectionMode) {
+    targetCenter = { x, y };
+    centerSelectionMode = false;
+    centerBtn.textContent = "4. Merkezi yeniden seç";
+    armBtn.disabled = false;
+    if (referenceFrame) {
+      warpedCtx.putImageData(referenceFrame, 0, 0);
+      drawTargetCenterMarker();
+    }
+    setStatus(
+      "Hedef merkezi kaydedildi. Puan artık kâğıdın ortasına göre değil bu noktaya göre hesaplanacak.",
+      "ok"
+    );
+    return;
+  }
+
+  if (manualPanel.classList.contains("hidden")) return;
   sendManualShot(x, y, 0.5);
 });
 
@@ -735,6 +811,17 @@ cancelManualBtn.addEventListener("click", () => {
   setStatus("Şüpheli algılama iptal edildi.", "");
 });
 
+centerBtn.addEventListener("click", () => {
+  if (!referenceFrame) {
+    setStatus("Önce temiz hedefi kaydet.", "warn");
+    return;
+  }
+  centerSelectionMode = true;
+  detectorArmed = false;
+  armBtn.textContent = "6. Sistemi hazırla";
+  setStatus("Düzeltilmiş hedefte 10 halkasının tam merkezine bir kez dokun.", "warn");
+});
+
 zoomRange.addEventListener("input", () => {
   softwareZoom = Number(zoomRange.value);
   zoomText.textContent = softwareZoom.toFixed(1);
@@ -743,8 +830,12 @@ zoomRange.addEventListener("input", () => {
   if (corners.length > 0 || referenceFrame) {
     corners = [];
     referenceFrame = null;
+    targetCenter = null;
+    centerSelectionMode = false;
     detectorArmed = false;
-    armBtn.textContent = "5. Sistemi hazırla";
+    centerBtn.disabled = true;
+    centerBtn.textContent = "4. Hedef merkezini seç";
+    armBtn.textContent = "6. Sistemi hazırla";
     armBtn.className = "";
     armBtn.disabled = true;
     manualPanel.classList.add("hidden");

@@ -88,3 +88,8 @@ Bu durumda HTTPS kullanmak gerekir. Sadece laptop localhost testi için HTTP yet
 ## Zoom notu
 
 Zoomu hedef köşelerini seçmeden önce ayarla. Zoom değiştirilirse köşe kalibrasyonu ve temiz referans otomatik sıfırlanır.
+
+
+## Hedef merkezi kalibrasyonu
+
+Kâğıt hedeflerde nişan merkezi çoğu zaman kartın geometrik ortasında değildir. Bu sürümde temiz hedef kaydedildikten sonra “Hedef merkezini seç” düğmesine basılır ve düzeltilmiş görüntüde 10 halkasının tam ortasına dokunulur. Atış koordinatları bu noktaya göre yeniden merkezlenir; böylece 9 bölgesindeki bir işaretin 7 olarak hesaplanması önlenir.
