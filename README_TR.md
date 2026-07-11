@@ -185,3 +185,17 @@ anlamına gelir.
 
 Hiçbir gerçek kamera sisteminde yüzde yüz doğruluk garanti edilemez. Bu paket
 düşük güvenli ve bitişik sonuçları otomatik göndermeyerek yanlış pozitifleri azaltır.
+
+
+## Crash Fix 4
+
+`Temiz hedefi kaydet` sırasında mobil tarayıcının donmasına yol açan ağır,
+tek-parça piksel işlemi düzeltildi.
+
+- Her pikselde `Array.sort()` çalıştıran eski medyan hesabı kaldırıldı.
+- 3/5 kare için sabit karşılaştırmalı hızlı medyan kullanıldı.
+- Perspektif ve medyan işlemleri küçük parçalara bölündü.
+- Her parça arasında tarayıcıya görüntü çizme ve kullanıcı arayüzünü güncelleme
+  fırsatı verildi.
+- Ham kare geçmişi 10 yerine 6 kareyle sınırlandı.
+- Temiz referans düğmesinin çift tıklamayla iki işlem başlatması engellendi.

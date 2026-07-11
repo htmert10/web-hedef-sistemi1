@@ -102,6 +102,16 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function yieldToBrowser() {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => resolve());
+    } else {
+      setTimeout(resolve, 0);
+    }
+  });
+}
+
 async function ensureOpenCvReady(timeoutMs = 20000) {
   const startedAt = Date.now();
 
@@ -692,7 +702,7 @@ function captureRawFrame() {
   );
   const frame = captureCtx.getImageData(0, 0, captureCanvas.width, captureCanvas.height);
   lastRawFrames.push(frame);
-  if (lastRawFrames.length > 10) lastRawFrames.shift();
+  if (lastRawFrames.length > 6) lastRawFrames.shift();
   return frame;
 }
 
@@ -903,18 +913,81 @@ function imageDataToGrayBuffer(imageData) {
   return gray;
 }
 
-function medianOfValues(values) {
-  values.sort((a, b) => a - b);
-  return values[Math.floor(values.length / 2)];
+function median3(a, b, c) {
+  if (a > b) [a, b] = [b, a];
+  if (b > c) [b, c] = [c, b];
+  if (a > b) [a, b] = [b, a];
+  return b;
 }
 
-function buildMedianWarpedGray(rawFrames) {
+function median5(a, b, c, d, e) {
+  // Sabit boyutlu karşılaştırma ağı: Array.sort kullanmaz ve çok daha az yük üretir.
+  if (a > b) [a, b] = [b, a];
+  if (d > e) [d, e] = [e, d];
+  if (a > c) [a, c] = [c, a];
+  if (b > c) [b, c] = [c, b];
+  if (a > d) [a, d] = [d, a];
+  if (c > d) [c, d] = [d, c];
+  if (b > e) [b, e] = [e, b];
+  if (b > c) [b, c] = [c, b];
+  if (d > e) [d, e] = [e, d];
+  if (c > d) [c, d] = [d, c];
+  return c;
+}
+
+function medianAt(buffers, index) {
+  const count = buffers.length;
+
+  if (count >= 5) {
+    return median5(
+      buffers[0][index],
+      buffers[1][index],
+      buffers[2][index],
+      buffers[3][index],
+      buffers[4][index]
+    );
+  }
+
+  if (count === 4) {
+    const values = [
+      buffers[0][index],
+      buffers[1][index],
+      buffers[2][index],
+      buffers[3][index]
+    ];
+    values.sort((a, b) => a - b);
+    return Math.round((values[1] + values[2]) / 2);
+  }
+
+  return median3(
+    buffers[0][index],
+    buffers[1][index],
+    buffers[2][index]
+  );
+}
+
+async function buildMedianWarpedGray(rawFrames) {
   if (!rawFrames || rawFrames.length < 3) {
     throw new Error("Medyan görüntü için en az 3 kare gerekli.");
   }
 
-  const warpedFrames = rawFrames.map((frame) => warpFrame(frame));
-  const grayBuffers = warpedFrames.map(imageDataToGrayBuffer);
+  // En fazla 5 kare kullan. Eski kare dizilerinin gereksiz bellek tüketmesini önler.
+  const selectedFrames = rawFrames.slice(-MEDIAN_FRAME_COUNT);
+  const grayBuffers = [];
+  let preview = null;
+
+  // Kareleri tek tek dönüştür ve her kareden sonra tarayıcıya nefes ver.
+  for (let frameIndex = 0; frameIndex < selectedFrames.length; frameIndex++) {
+    const warped = warpFrame(selectedFrames[frameIndex]);
+    grayBuffers.push(imageDataToGrayBuffer(warped));
+
+    if (frameIndex === selectedFrames.length - 1) {
+      preview = warped;
+    }
+
+    await yieldToBrowser();
+  }
+
   const pixelCount = CANONICAL_SIZE * CANONICAL_SIZE;
   const output = new cv.Mat(
     CANONICAL_SIZE,
@@ -922,38 +995,45 @@ function buildMedianWarpedGray(rawFrames) {
     cv.CV_8UC1
   );
 
-  const samples = new Array(grayBuffers.length);
+  // 250.000 pikseli tek blokta işlemek yerine parçalara böl.
+  const chunkSize = 12000;
 
-  for (let pixel = 0; pixel < pixelCount; pixel++) {
-    for (let frameIndex = 0; frameIndex < grayBuffers.length; frameIndex++) {
-      samples[frameIndex] = grayBuffers[frameIndex][pixel];
+  for (let start = 0; start < pixelCount; start += chunkSize) {
+    const end = Math.min(pixelCount, start + chunkSize);
+
+    for (let pixel = start; pixel < end; pixel++) {
+      output.data[pixel] = medianAt(grayBuffers, pixel);
     }
-    output.data[pixel] = medianOfValues(samples);
+
+    await yieldToBrowser();
   }
 
   return {
     gray: output,
-    preview: warpedFrames[warpedFrames.length - 1]
+    preview
   };
 }
 
 async function saveReference() {
+  if (referenceBtn.dataset.busy === "1") return;
+
   if (corners.length !== 4) {
     setStatus("Önce hedefin dört köşesini seç.", "warn");
     return;
   }
 
+  referenceBtn.dataset.busy = "1";
   referenceBtn.disabled = true;
 
   try {
     await ensureOpenCvReady();
     setStatus(
-      `${MEDIAN_FRAME_COUNT} sabit kareden temiz referans hazırlanıyor...`,
+      `${MEDIAN_FRAME_COUNT} kare işleniyor. Bu sırada sayfayı kapatma...`,
       "warn"
     );
 
     const rawFrames = await collectRawFrames();
-    const median = buildMedianWarpedGray(rawFrames);
+    const median = await buildMedianWarpedGray(rawFrames);
 
     replaceReferenceMedian(median.gray);
     clearPendingDetection();
@@ -980,6 +1060,7 @@ async function saveReference() {
       "danger"
     );
   } finally {
+    referenceBtn.dataset.busy = "0";
     referenceBtn.disabled = corners.length !== 4;
   }
 }
@@ -1687,7 +1768,7 @@ async function triggerProcessPipeline() {
     await delay(260);
 
     const rawFrames = await collectRawFrames();
-    const currentMedian = buildMedianWarpedGray(rawFrames);
+    const currentMedian = await buildMedianWarpedGray(rawFrames);
     const detection = findNewMarker(
       referenceMedianGray,
       currentMedian.gray
