@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Dijital Hedef</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <h1>💻 Dijital Hedef</h1>
+        <p class="muted">Telefonun gönderdiği koordinatlar anlık işlenir.</p>
+      </div>
+      <a class="button-link" href="/">Ana ekran</a>
+    </header>
+
+    <section class="grid">
+      <div class="card">
+        <canvas id="targetCanvas" class="target-canvas" width="700" height="700"></canvas>
+        <div id="eventStatus" class="status">Telefon bağlantısı bekleniyor.</div>
+      </div>
+
+      <aside>
+        <section class="card">
+          <div class="metric-grid">
+            <div class="metric"><span class="muted small">Atış</span><strong id="countMetric">0</strong></div>
+            <div class="metric"><span class="muted small">Toplam</span><strong id="totalMetric">0</strong></div>
+            <div class="metric"><span class="muted small">Ortalama</span><strong id="averageMetric">0.00</strong></div>
+            <div class="metric"><span class="muted small">Grupman</span><strong id="groupMetric">0 mm</strong></div>
+          </div>
+          <div class="button-row" style="margin-top:14px">
+            <button id="deleteLastBtn" class="warn">Son atışı sil</button>
+            <button id="resetBtn" class="danger">Seriyi sıfırla</button>
+          </div>
+        </section>
+
+        <section class="card" style="margin-top:16px">
+          <h2>Atış listesi</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Puan</th>
+                  <th>Durum</th>
+                  <th>Güven</th>
+                </tr>
+              </thead>
+              <tbody id="shotRows"></tbody>
+            </table>
+          </div>
+        </section>
+      </aside>
+    </section>
+  </main>
+  <script src="/static/js/dashboard.js"></script>
+</body>
+</html>

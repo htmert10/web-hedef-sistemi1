@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+  <title>Telefon Sensörü</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <h1>📱 Telefon Sensörü</h1>
+        <p class="muted">Kamera sabit, hedef kadrajda ve ışık mümkün olduğunca değişmez olsun.</p>
+      </div>
+      <a class="button-link" href="/">Ana ekran</a>
+    </header>
+
+    <section class="grid">
+      <div class="card">
+        <div id="videoStage" class="video-stage">
+          <video id="video" autoplay playsinline muted></video>
+          <canvas id="overlay"></canvas>
+        </div>
+
+        <div id="status" class="status">Sistemi başlat.</div>
+
+        <div class="button-row">
+          <button id="startBtn" class="primary">1. Kamera + mikrofonu aç</button>
+          <button id="resetCornersBtn" disabled>2. Köşeleri sıfırla</button>
+          <button id="referenceBtn" disabled class="ok">3. Temiz hedefi kaydet</button>
+          <button id="learnSoundBtn" disabled class="warn">4. Sesi öğret</button>
+          <button id="armBtn" disabled>5. Sistemi hazırla</button>
+          <button id="testBtn" disabled>Test tetikle</button>
+        </div>
+
+        <p class="muted small" style="margin-top:12px">
+          Köşeleri hedefin sol üst → sağ üst → sağ alt → sol alt sırasıyla seç.
+        </p>
+      </div>
+
+      <aside class="card">
+        <h2>Canlı sensör</h2>
+        <label>Ses seviyesi</label>
+        <input id="audioMeter" type="range" min="0" max="100" value="0" disabled>
+
+        <label style="margin-top:14px">Algılama eşiği</label>
+        <input id="thresholdRange" type="range" min="3" max="65" value="22">
+        <p class="muted small">Eşik: <span id="thresholdText">22</span>%</p>
+
+        <div class="metric-grid" style="grid-template-columns:repeat(2,1fr)">
+          <div class="metric"><span class="muted small">Köşe</span><strong id="cornerCount">0/4</strong></div>
+          <div class="metric"><span class="muted small">Bağlantı</span><strong id="connectionState">...</strong></div>
+        </div>
+
+        <h2 style="margin-top:18px">Düzeltilmiş hedef</h2>
+        <canvas id="warpedPreview" class="preview-canvas" width="500" height="500"></canvas>
+        <p class="muted small">Şüpheli üst üste atışta bu hedefe dokunarak konumu elle seçebilirsin.</p>
+
+        <div id="manualPanel" class="hidden">
+          <div class="status warn">
+            Atış algılandı, fakat yeni delik kesin bulunamadı. Muhtemel üst üste atış.
+          </div>
+          <div class="button-row">
+            <button id="confirmSuggestedBtn" class="warn">Önerilen konumu şüpheli kaydet</button>
+            <button id="cancelManualBtn">İptal</button>
+          </div>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <script src="/static/js/tablet.js"></script>
+</body>
+</html>
