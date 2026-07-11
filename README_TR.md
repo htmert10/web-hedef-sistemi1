@@ -199,3 +199,20 @@ tek-parça piksel işlemi düzeltildi.
   fırsatı verildi.
 - Ham kare geçmişi 10 yerine 6 kareyle sınırlandı.
 - Temiz referans düğmesinin çift tıklamayla iki işlem başlatması engellendi.
+
+
+## Reference Crash Fix V2
+
+İlk düzeltme yetersiz kaldığı için referans kaydetme yolu tamamen hafifletildi:
+
+- Referans kaydında 5 ayrı perspektif dönüşümü kaldırıldı.
+- Referans yalnızca tek sabit kareden oluşturulur.
+- İşleme matrisi 500×500 yerine 360×360 kullanılır.
+- Kamera yakalama genişliği 960 yerine 720 piksele düşürüldü.
+- Ham kare geçmişi en fazla 4 kare tutulur.
+- OpenCV matrisi doğrudan gri tampon üzerinden oluşturulur.
+- Global JavaScript ve Promise hataları ekranda görünür.
+- Otomatik değişiklik kontrolünde 3 karelik medyan korunur.
+
+Bu sürümde `Temiz hedefi kaydet` işleminin tarayıcıyı kapatması veya sayfayı
+kilitlemesi beklenmez. Bir hata kalırsa ekranda artık gerçek hata mesajı görünür.

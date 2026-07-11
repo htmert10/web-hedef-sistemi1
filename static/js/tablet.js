@@ -1,7 +1,7 @@
 "use strict";
 
-const CANONICAL_SIZE = 500;
-const CAPTURE_MAX_WIDTH = 960;
+const CANONICAL_SIZE = 360;
+const CAPTURE_MAX_WIDTH = 720;
 
 const video = document.getElementById("video");
 const cameraPreview = document.getElementById("cameraPreview");
@@ -10,6 +10,9 @@ const overlay = document.getElementById("overlay");
 const overlayCtx = overlay.getContext("2d");
 const warpedPreview = document.getElementById("warpedPreview");
 const warpedCtx = warpedPreview.getContext("2d");
+
+warpedPreview.width = CANONICAL_SIZE;
+warpedPreview.height = CANONICAL_SIZE;
 
 const startBtn = document.getElementById("startBtn");
 const resetCornersBtn = document.getElementById("resetCornersBtn");
@@ -67,9 +70,9 @@ let affineTransform = null;
 let calibrationReady = false;
 
 // Güvenli kalem noktası / etiket değişikliği algılama durumu.
-const MEDIAN_FRAME_COUNT = 5;
+const MEDIAN_FRAME_COUNT = 3;
 const FRAME_INTERVAL_MS = 85;
-const MAX_ALIGNMENT_SHIFT = 6;
+const MAX_ALIGNMENT_SHIFT = 4;
 const MIN_CONFIDENCE_TO_SEND = 0.58;
 const TRIGGER_COOLDOWN_MS = 1800;
 
@@ -78,7 +81,7 @@ const TRIGGER_COOLDOWN_MS = 1800;
 const DARK_REFERENCE_CUTOFF = 118;
 const BLACK_TO_OUTER_ROI_RATIO = 2.62;
 const ROI_EDGE_PADDING_PX = 8;
-const LOCAL_MEAN_BLOCK_SIZE = 31;
+const LOCAL_MEAN_BLOCK_SIZE = 21;
 const DARK_LOCAL_OFFSET = 2;
 const LIGHT_LOCAL_OFFSET = 5;
 const MERGED_AREA_THRESHOLD = 360;
@@ -93,6 +96,19 @@ function setStatus(text, level = "") {
   statusBox.className = `status ${level}`.trim();
   statusBox.textContent = text;
 }
+
+window.addEventListener("error", (event) => {
+  const message = event?.error?.message || event.message || "Bilinmeyen JavaScript hatası";
+  console.error("Global error:", event.error || event);
+  setStatus(`Kod hatası: ${message}`, "danger");
+});
+
+window.addEventListener("unhandledrejection", (event) => {
+  const reason = event.reason;
+  const message = reason?.message || String(reason || "Bilinmeyen Promise hatası");
+  console.error("Unhandled rejection:", reason);
+  setStatus(`İşlem hatası: ${message}`, "danger");
+});
 
 function clamp01(value) {
   return Math.max(0, Math.min(1, value));
@@ -702,7 +718,7 @@ function captureRawFrame() {
   );
   const frame = captureCtx.getImageData(0, 0, captureCanvas.width, captureCanvas.height);
   lastRawFrames.push(frame);
-  if (lastRawFrames.length > 6) lastRawFrames.shift();
+  if (lastRawFrames.length > 4) lastRawFrames.shift();
   return frame;
 }
 
@@ -913,6 +929,17 @@ function imageDataToGrayBuffer(imageData) {
   return gray;
 }
 
+function grayMatFromWarpedImageData(imageData) {
+  const grayBuffer = imageDataToGrayBuffer(imageData);
+  const mat = new cv.Mat(
+    imageData.height,
+    imageData.width,
+    cv.CV_8UC1
+  );
+  mat.data.set(grayBuffer);
+  return mat;
+}
+
 function median3(a, b, c) {
   if (a > b) [a, b] = [b, a];
   if (b > c) [b, c] = [c, b];
@@ -996,7 +1023,7 @@ async function buildMedianWarpedGray(rawFrames) {
   );
 
   // 250.000 pikseli tek blokta işlemek yerine parçalara böl.
-  const chunkSize = 12000;
+  const chunkSize = 6000;
 
   for (let start = 0; start < pixelCount; start += chunkSize) {
     const end = Math.min(pixelCount, start + chunkSize);
@@ -1027,20 +1054,32 @@ async function saveReference() {
 
   try {
     await ensureOpenCvReady();
+
     setStatus(
-      `${MEDIAN_FRAME_COUNT} kare işleniyor. Bu sırada sayfayı kapatma...`,
+      "Tek sabit kareden referans hazırlanıyor...",
       "warn"
     );
 
-    const rawFrames = await collectRawFrames();
-    const median = await buildMedianWarpedGray(rawFrames);
+    // Önce tarayıcıya durum mesajını çizme fırsatı ver.
+    await yieldToBrowser();
 
-    replaceReferenceMedian(median.gray);
+    const rawFrame = captureRawFrame();
+
+    // En ağır bölüm yalnızca bir kez çalışır.
+    const warped = warpFrame(rawFrame);
+
+    await yieldToBrowser();
+
+    const gray = grayMatFromWarpedImageData(warped);
+    replaceReferenceMedian(gray);
     clearPendingDetection();
 
-    referenceFrame = median.preview;
+    referenceFrame = warped;
     warpedCtx.putImageData(referenceFrame, 0, 0);
     drawCalibrationOverlay();
+
+    // Eski yüksek çözünürlüklü kare geçmişini temizle.
+    lastRawFrames = [rawFrame];
 
     targetCenter = null;
     centerSelectionMode = false;
@@ -1050,13 +1089,13 @@ async function saveReference() {
     armBtn.disabled = true;
 
     setStatus(
-      "Kararlı medyan referans kaydedildi. Şimdi hedef merkezini seç.",
+      `Referans kaydedildi (${CANONICAL_SIZE}×${CANONICAL_SIZE}). Şimdi hedef merkezini seç.`,
       "ok"
     );
   } catch (error) {
-    console.error(error);
+    console.error("saveReference failed:", error);
     setStatus(
-      `Referans oluşturulamadı: ${error.message || error}`,
+      `Referans kaydedilemedi: ${error.message || error}`,
       "danger"
     );
   } finally {
