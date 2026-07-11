@@ -233,3 +233,23 @@ Bu sürümde `Temiz hedefi kaydet` yolu OpenCV/WebAssembly'den tamamen ayrıldı
 
 Bu düzeltme özellikle `Temiz hedefi kaydet` düğmesine basıldığı anda tarayıcı
 sekmesinin kapanması, yeniden yüklenmesi veya boş ekrana düşmesi sorununu hedefler.
+
+
+## Stabil Worker sürümü
+
+Bu sürümde güvenli kalem noktası / etiket değişikliği analizi ana tarayıcı
+iş parçacığından çıkarılmıştır.
+
+- OpenCV.js tamamen kaldırıldı.
+- Tek bir 360×360 perspektif kare alınır.
+- Analiz için görüntü 180×180'e küçültülür.
+- ±2 piksel hizalama, çift yönlü fark, dinamik koyu/açık eşik, ROI,
+  hafif morphology ve bağlı bileşen analizi ayrı Web Worker içinde çalışır.
+- Ana arayüz, kamera önizlemesi ve butonlar analiz sırasında donmaz.
+- Aynı anda yalnızca bir analiz çalışabilir.
+- Güven %82 altında veya iki aday birbirine yakınsa otomatik gönderim yapılmaz.
+- Büyük/bitişik değişiklikler otomatik kabul edilmez ve manuel kontrol ister.
+
+Hiçbir kamera sistemi için hatasız algılama garantisi verilemez. Bu sürümün amacı
+donmayı kaldırmak ve belirsiz sonuçları otomatik göndermeyerek yanlış pozitifleri
+azaltmaktır.

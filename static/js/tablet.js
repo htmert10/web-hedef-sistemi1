@@ -76,6 +76,12 @@ const MAX_ALIGNMENT_SHIFT = 4;
 const MIN_CONFIDENCE_TO_SEND = 0.58;
 const TRIGGER_COOLDOWN_MS = 1800;
 
+// Stabil güvenli kalem noktası / etiket algılama.
+// Ağır analiz ayrı Worker içinde 180×180 çözünürlükte çalışır.
+const DETECTION_SIZE = 180;
+const MIN_WORKER_AUTO_CONFIDENCE = 0.82;
+const MARKER_WORKER_URL = "/static/js/marker-worker.js?v=stable-worker-1";
+
 // Güvenli işaret algılama V2:
 // koyu/açık bölgeye göre dinamik duyarlılık ve hedef-içi ROI.
 const DARK_REFERENCE_CUTOFF = 118;
@@ -89,7 +95,13 @@ const MAX_COMPONENT_AREA = 5200;
 
 let referenceMedianGray = null;
 let referenceGrayBuffer = null;
+let referenceWorkerGray = null;
 let pendingMedianGray = null;
+let pendingWorkerFrame = null;
+let markerWorker = null;
+let markerWorkerBusy = false;
+let markerWorkerSequence = 0;
+const markerWorkerRequests = new Map();
 let pendingPreviewFrame = null;
 let lastTriggerAt = 0;
 
@@ -128,6 +140,154 @@ function yieldToBrowser() {
     }
   });
 }
+
+function createMarkerWorker() {
+  if (markerWorker) return markerWorker;
+
+  markerWorker = new Worker(MARKER_WORKER_URL);
+
+  markerWorker.addEventListener("message", (event) => {
+    const payload = event.data || {};
+    const pending = markerWorkerRequests.get(payload.id);
+    if (!pending) return;
+
+    markerWorkerRequests.delete(payload.id);
+
+    if (payload.ok) {
+      pending.resolve(payload.result);
+    } else {
+      pending.reject(new Error(payload.error || "Worker işlem hatası"));
+    }
+  });
+
+  markerWorker.addEventListener("error", (event) => {
+    const error = new Error(event.message || "Marker Worker çöktü.");
+
+    for (const pending of markerWorkerRequests.values()) {
+      pending.reject(error);
+    }
+
+    markerWorkerRequests.clear();
+    markerWorker.terminate();
+    markerWorker = null;
+  });
+
+  return markerWorker;
+}
+
+function runMarkerWorker(payload) {
+  return new Promise((resolve, reject) => {
+    const worker = createMarkerWorker();
+    const id = ++markerWorkerSequence;
+
+    markerWorkerRequests.set(id, { resolve, reject });
+
+    const referenceCopy = payload.reference.slice();
+    const currentCopy = payload.current.slice();
+
+    worker.postMessage(
+      {
+        id,
+        ...payload,
+        reference: referenceCopy.buffer,
+        current: currentCopy.buffer
+      },
+      [referenceCopy.buffer, currentCopy.buffer]
+    );
+  });
+}
+
+function downsampleGrayBuffer(
+  source,
+  sourceWidth,
+  sourceHeight,
+  targetWidth,
+  targetHeight
+) {
+  const output = new Uint8Array(targetWidth * targetHeight);
+  const xScale = sourceWidth / targetWidth;
+  const yScale = sourceHeight / targetHeight;
+
+  for (let targetY = 0; targetY < targetHeight; targetY++) {
+    const sourceY0 = Math.floor(targetY * yScale);
+    const sourceY1 = Math.min(
+      sourceHeight,
+      Math.max(sourceY0 + 1, Math.floor((targetY + 1) * yScale))
+    );
+
+    for (let targetX = 0; targetX < targetWidth; targetX++) {
+      const sourceX0 = Math.floor(targetX * xScale);
+      const sourceX1 = Math.min(
+        sourceWidth,
+        Math.max(sourceX0 + 1, Math.floor((targetX + 1) * xScale))
+      );
+
+      let total = 0;
+      let count = 0;
+
+      for (let sourceY = sourceY0; sourceY < sourceY1; sourceY++) {
+        const row = sourceY * sourceWidth;
+
+        for (let sourceX = sourceX0; sourceX < sourceX1; sourceX++) {
+          total += source[row + sourceX];
+          count++;
+        }
+      }
+
+      output[targetY * targetWidth + targetX] = count
+        ? Math.round(total / count)
+        : 0;
+    }
+  }
+
+  return output;
+}
+
+function refreshWorkerReference() {
+  if (!referenceGrayBuffer) {
+    referenceWorkerGray = null;
+    return;
+  }
+
+  referenceWorkerGray = downsampleGrayBuffer(
+    referenceGrayBuffer,
+    CANONICAL_SIZE,
+    CANONICAL_SIZE,
+    DETECTION_SIZE,
+    DETECTION_SIZE
+  );
+}
+
+function workerRoiSettings() {
+  const centerX = Math.round(
+    (targetCenter?.x ?? 0.5) * (DETECTION_SIZE - 1)
+  );
+  const centerY = Math.round(
+    (targetCenter?.y ?? 0.5) * (DETECTION_SIZE - 1)
+  );
+
+  let radius = DETECTION_SIZE * 0.46;
+
+  if (typeof observedBlackRadiusPixels === "function") {
+    const observedBlackRadius = observedBlackRadiusPixels();
+
+    if (Number.isFinite(observedBlackRadius) && observedBlackRadius > 4) {
+      radius = Math.min(
+        DETECTION_SIZE * 0.49,
+        observedBlackRadius / CANONICAL_SIZE *
+          DETECTION_SIZE *
+          BLACK_TO_OUTER_ROI_RATIO
+      );
+    }
+  }
+
+  return {
+    centerX,
+    centerY,
+    radius: Math.max(20, Math.round(radius))
+  };
+}
+
 
 async function ensureOpenCvReady(timeoutMs = 20000) {
   const startedAt = Date.now();
@@ -170,11 +330,13 @@ function replaceReferenceMedian(nextMat) {
 function clearReferenceData() {
   replaceReferenceMedian(null);
   referenceGrayBuffer = null;
+  referenceWorkerGray = null;
 }
 
 function storeReferenceBufferFromImageData(imageData) {
   referenceGrayBuffer = imageDataToGrayBuffer(imageData);
   replaceReferenceMedian(null);
+  refreshWorkerReference();
 }
 
 function matFromGrayBuffer(buffer, width, height) {
@@ -207,18 +369,18 @@ function clearPendingDetection() {
   deleteMat(pendingMedianGray);
   pendingMedianGray = null;
   pendingPreviewFrame = null;
+  pendingWorkerFrame = null;
   candidateSuggestion = null;
   confirmSuggestedBtn.disabled = true;
 }
 
 function commitPendingReference() {
-  if (pendingMedianGray) {
-    referenceGrayBuffer = pendingMedianGray.data.slice();
-    replaceReferenceMedian(pendingMedianGray.clone());
-  }
-
-  if (pendingPreviewFrame) {
+  if (pendingWorkerFrame) {
+    referenceFrame = pendingWorkerFrame;
+    storeReferenceBufferFromImageData(pendingWorkerFrame);
+  } else if (pendingPreviewFrame) {
     referenceFrame = pendingPreviewFrame;
+    storeReferenceBufferFromImageData(pendingPreviewFrame);
   }
 
   clearPendingDetection();
@@ -1813,43 +1975,64 @@ function drawMarkerCandidates(detection) {
 async function triggerProcessPipeline() {
   if (
     triggerLocked ||
-    (!referenceMedianGray && !referenceGrayBuffer) ||
+    markerWorkerBusy ||
+    !referenceWorkerGray ||
     corners.length !== 4
   ) {
     return;
   }
 
   triggerLocked = true;
+  markerWorkerBusy = true;
   clearPendingDetection();
 
   try {
-    await ensureOpenCvReady();
-
-    // OpenCV matrisi ancak algılama gerçekten başlatıldığında oluşturulur.
-    const activeReferenceGray = ensureReferenceMat();
-
-    send({
-      type: "sensor_event",
-      message: "Tanımlı ses algılandı. Güvenli işaret değişikliği aranıyor...",
-      level: "info"
-    });
-
     setStatus(
-      `${MEDIAN_FRAME_COUNT} yeni kare toplanıyor ve hizalanıyor...`,
+      "Görüntü alınıyor. Analiz arka planda çalışacak...",
       "warn"
     );
 
-    // Görüntünün oturması için kısa bekleme.
-    await delay(260);
+    send({
+      type: "sensor_event",
+      message: "Güvenli kâğıt işareti değişikliği analiz ediliyor.",
+      level: "info"
+    });
 
-    const rawFrames = await collectRawFrames();
-    const currentMedian = await buildMedianWarpedGray(rawFrames);
-    const detection = findNewMarker(
-      activeReferenceGray,
-      currentMedian.gray
+    // Kâğıt/görüntü akışının oturması için kısa süre.
+    await delay(260);
+    await yieldToBrowser();
+
+    // Sadece tek perspektif dönüşümü. Ana thread burada kısa süre çalışır.
+    const rawFrame = captureRawFrame();
+    const currentWarped = warpFrame(rawFrame);
+    const currentGrayFull = imageDataToGrayBuffer(currentWarped);
+
+    await yieldToBrowser();
+
+    const currentWorkerGray = downsampleGrayBuffer(
+      currentGrayFull,
+      CANONICAL_SIZE,
+      CANONICAL_SIZE,
+      DETECTION_SIZE,
+      DETECTION_SIZE
     );
 
-    warpedCtx.putImageData(currentMedian.preview, 0, 0);
+    const roi = workerRoiSettings();
+
+    // Ağır hizalama, fark, maske ve bileşen analizi Worker'da.
+    const detection = await runMarkerWorker({
+      width: DETECTION_SIZE,
+      height: DETECTION_SIZE,
+      reference: referenceWorkerGray,
+      current: currentWorkerGray,
+      centerX: roi.centerX,
+      centerY: roi.centerY,
+      roiRadius: roi.radius,
+      maxShift: 2,
+      minAutoConfidence: MIN_WORKER_AUTO_CONFIDENCE
+    });
+
+    warpedCtx.putImageData(currentWarped, 0, 0);
     drawCalibrationOverlay();
     drawMarkerCandidates(detection);
 
@@ -1868,21 +2051,17 @@ async function triggerProcessPipeline() {
         source: "marker"
       });
 
-      // Başarılı işaret yeni referansın parçası olur.
-      referenceGrayBuffer = currentMedian.gray.data.slice();
-      replaceReferenceMedian(currentMedian.gray.clone());
-      referenceFrame = currentMedian.preview;
-      currentMedian.gray.delete();
+      referenceFrame = currentWarped;
+      storeReferenceBufferFromImageData(currentWarped);
 
       setStatus(
-        `Yeni işaret otomatik bulundu. Güven: %${Math.round(
+        `İşaret bulundu. Güven: %${Math.round(
           detection.best.confidence * 100
         )} · hizalama: ${detection.alignment.dx},${detection.alignment.dy}px`,
         "ok"
       );
     } else {
-      pendingMedianGray = currentMedian.gray;
-      pendingPreviewFrame = currentMedian.preview;
+      pendingWorkerFrame = currentWarped;
 
       candidateSuggestion = detection.best
         ? {
@@ -1899,28 +2078,26 @@ async function triggerProcessPipeline() {
         ? `%${Math.round(detection.best.confidence * 100)}`
         : "aday yok";
 
-      const reviewReason = detection.best?.merged || detection.best?.splitFromMerged
-        ? "Bitişik/büyük değişiklik bulundu; manuel kontrol gerekli."
-        : `Otomatik güven yetersiz (${confidenceText}).`;
-
       setStatus(
-        `${reviewReason} En iyi adayı kontrol et veya görüntüye dokun.`,
+        `Güven düşük (${confidenceText}). Otomatik gönderilmedi; adayı kontrol et veya görüntüye dokun.`,
         "warn"
       );
 
       send({
         type: "sensor_event",
-        message: "İşaret değişikliği için manuel onay gerekli.",
+        message: "Düşük güvenli görüntü değişikliği için manuel onay gerekli.",
         level: "warn"
       });
     }
   } catch (error) {
-    console.error(error);
+    console.error("Worker detection failed:", error);
+
     setStatus(
       `Algılama hatası: ${error.message || error}`,
       "danger"
     );
   } finally {
+    markerWorkerBusy = false;
     triggerLocked = false;
   }
 }
