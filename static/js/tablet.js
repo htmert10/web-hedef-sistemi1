@@ -79,8 +79,10 @@ const TRIGGER_COOLDOWN_MS = 1800;
 // Stabil güvenli kalem noktası / etiket algılama.
 // Ağır analiz ayrı Worker içinde 180×180 çözünürlükte çalışır.
 const DETECTION_SIZE = 180;
-const MIN_WORKER_AUTO_CONFIDENCE = 0.82;
-const MARKER_WORKER_URL = "/static/js/marker-worker.js?v=stable-worker-1";
+const MIN_WORKER_AUTO_CONFIDENCE = 0.76;
+const DETECTION_FRAME_COUNT = 3;
+const DETECTION_FRAME_GAP_MS = 70;
+const MARKER_WORKER_URL = "/static/js/marker-worker.js?v=stable-detection-2";
 
 // Güvenli işaret algılama V2:
 // koyu/açık bölgeye göre dinamik duyarlılık ve hedef-içi ROI.
@@ -238,6 +240,28 @@ function downsampleGrayBuffer(
         ? Math.round(total / count)
         : 0;
     }
+  }
+
+  return output;
+}
+
+function medianGrayFrames(frames) {
+  if (frames.length !== DETECTION_FRAME_COUNT) {
+    throw new Error("Kararlı algılama için üç kare gerekli.");
+  }
+
+  const output = new Uint8Array(frames[0].length);
+  const first = frames[0];
+  const second = frames[1];
+  const third = frames[2];
+
+  for (let index = 0; index < output.length; index++) {
+    const a = first[index];
+    const b = second[index];
+    const c = third[index];
+    output[index] = a > b
+      ? (b > c ? b : Math.min(a, c))
+      : (a > c ? a : Math.min(b, c));
   }
 
   return output;
@@ -2002,20 +2026,32 @@ async function triggerProcessPipeline() {
     await delay(260);
     await yieldToBrowser();
 
-    // Sadece tek perspektif dönüşümü. Ana thread burada kısa süre çalışır.
-    const rawFrame = captureRawFrame();
-    const currentWarped = warpFrame(rawFrame);
-    const currentGrayFull = imageDataToGrayBuffer(currentWarped);
+    // Üç kısa kareyi medyanlayarak namlu sesi sonrası titreşim, gölge ve
+    // sıkıştırma parazitlerinin tek başına atış adayı olmasını engelle.
+    const detectionFrames = [];
+    let currentWarped = null;
 
-    await yieldToBrowser();
+    for (let index = 0; index < DETECTION_FRAME_COUNT; index++) {
+      if (index > 0) await delay(DETECTION_FRAME_GAP_MS);
 
-    const currentWorkerGray = downsampleGrayBuffer(
-      currentGrayFull,
-      CANONICAL_SIZE,
-      CANONICAL_SIZE,
-      DETECTION_SIZE,
-      DETECTION_SIZE
-    );
+      const rawFrame = captureRawFrame();
+      currentWarped = warpFrame(rawFrame);
+      const currentGrayFull = imageDataToGrayBuffer(currentWarped);
+
+      detectionFrames.push(
+        downsampleGrayBuffer(
+          currentGrayFull,
+          CANONICAL_SIZE,
+          CANONICAL_SIZE,
+          DETECTION_SIZE,
+          DETECTION_SIZE
+        )
+      );
+
+      await yieldToBrowser();
+    }
+
+    const currentWorkerGray = medianGrayFrames(detectionFrames);
 
     const roi = workerRoiSettings();
 
