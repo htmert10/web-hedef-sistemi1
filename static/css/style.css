@@ -220,3 +220,20 @@ th, td {
   .metric-grid { grid-template-columns: repeat(2, 1fr); }
   .role-grid { grid-template-columns: 1fr; }
 }
+
+
+.video-stage #cameraPreview {
+  position: relative;
+  inset: auto;
+  z-index: 1;
+}
+
+.video-stage #overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+}
+
+.video-stage #video {
+  display: none;
+}

@@ -4,6 +4,8 @@ const CANONICAL_SIZE = 500;
 const CAPTURE_MAX_WIDTH = 960;
 
 const video = document.getElementById("video");
+const cameraPreview = document.getElementById("cameraPreview");
+const cameraPreviewCtx = cameraPreview.getContext("2d");
 const overlay = document.getElementById("overlay");
 const overlayCtx = overlay.getContext("2d");
 const warpedPreview = document.getElementById("warpedPreview");
@@ -17,6 +19,8 @@ const armBtn = document.getElementById("armBtn");
 const testBtn = document.getElementById("testBtn");
 const statusBox = document.getElementById("status");
 const audioMeter = document.getElementById("audioMeter");
+const zoomRange = document.getElementById("zoomRange");
+const zoomText = document.getElementById("zoomText");
 const thresholdRange = document.getElementById("thresholdRange");
 const thresholdText = document.getElementById("thresholdText");
 const cornerCount = document.getElementById("cornerCount");
@@ -45,6 +49,7 @@ let candidateSuggestion = null;
 let localShots = [];
 let animationFrameId = null;
 let lastRawCaptureAt = 0;
+let softwareZoom = 1;
 
 function setStatus(text, level = "") {
   statusBox.className = `status ${level}`.trim();
@@ -87,9 +92,50 @@ function resizeCapture() {
   const ratio = video.videoHeight / video.videoWidth;
   captureCanvas.width = CAPTURE_MAX_WIDTH;
   captureCanvas.height = Math.round(CAPTURE_MAX_WIDTH * ratio);
+
+  cameraPreview.width = captureCanvas.width;
+  cameraPreview.height = captureCanvas.height;
   overlay.width = captureCanvas.width;
   overlay.height = captureCanvas.height;
+
+  drawCameraPreview();
   drawOverlay();
+}
+
+function zoomCrop() {
+  const sourceWidth = video.videoWidth / softwareZoom;
+  const sourceHeight = video.videoHeight / softwareZoom;
+  return {
+    sx: (video.videoWidth - sourceWidth) / 2,
+    sy: (video.videoHeight - sourceHeight) / 2,
+    sw: sourceWidth,
+    sh: sourceHeight
+  };
+}
+
+function drawZoomedVideoFrame(context, width, height) {
+  if (!video.videoWidth || !video.videoHeight) return;
+  const crop = zoomCrop();
+  context.drawImage(
+    video,
+    crop.sx,
+    crop.sy,
+    crop.sw,
+    crop.sh,
+    0,
+    0,
+    width,
+    height
+  );
+}
+
+function drawCameraPreview() {
+  if (video.readyState < 2 || !cameraPreview.width) return;
+  drawZoomedVideoFrame(
+    cameraPreviewCtx,
+    cameraPreview.width,
+    cameraPreview.height
+  );
 }
 
 async function startMedia() {
@@ -129,6 +175,7 @@ async function startMedia() {
     resetCornersBtn.disabled = false;
     learnSoundBtn.disabled = false;
     testBtn.disabled = false;
+    zoomRange.disabled = false;
 
     setStatus("Kamera açık. Hedefin dört köşesini sırayla seç.", "ok");
   } catch (error) {
@@ -159,6 +206,8 @@ function currentRms() {
 
 function startLoop() {
   const loop = (time) => {
+    drawCameraPreview();
+
     const rms = currentRms();
     audioMeter.value = Math.min(100, Math.round(rms * 250));
 
@@ -183,7 +232,11 @@ function startLoop() {
 }
 
 function captureRawFrame() {
-  captureCtx.drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
+  drawZoomedVideoFrame(
+    captureCtx,
+    captureCanvas.width,
+    captureCanvas.height
+  );
   const frame = captureCtx.getImageData(0, 0, captureCanvas.width, captureCanvas.height);
   lastRawFrames.push(frame);
   if (lastRawFrames.length > 10) lastRawFrames.shift();
@@ -680,6 +733,28 @@ cancelManualBtn.addEventListener("click", () => {
   manualPanel.classList.add("hidden");
   candidateSuggestion = null;
   setStatus("Şüpheli algılama iptal edildi.", "");
+});
+
+zoomRange.addEventListener("input", () => {
+  softwareZoom = Number(zoomRange.value);
+  zoomText.textContent = softwareZoom.toFixed(1);
+  drawCameraPreview();
+
+  if (corners.length > 0 || referenceFrame) {
+    corners = [];
+    referenceFrame = null;
+    detectorArmed = false;
+    armBtn.textContent = "5. Sistemi hazırla";
+    armBtn.className = "";
+    armBtn.disabled = true;
+    manualPanel.classList.add("hidden");
+    warpedCtx.clearRect(0, 0, CANONICAL_SIZE, CANONICAL_SIZE);
+    drawOverlay();
+    setStatus(
+      "Zoom değişti. Hedefin dört köşesini yeniden seç.",
+      "warn"
+    );
+  }
 });
 
 thresholdRange.addEventListener("input", () => {

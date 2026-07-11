@@ -8,6 +8,7 @@ Bu proje iki web ekranından oluşur:
 ## Ne çalışıyor?
 
 - Kamera ve mikrofon izni
+- 1x–4x dijital kamera yakınlaştırma
 - Hedefin dört köşesini elle seçme
 - Perspektif düzeltme
 - Temiz hedef referansı
@@ -82,3 +83,8 @@ Bu durumda HTTPS kullanmak gerekir. Sadece laptop localhost testi için HTTP yet
 - Ayarlanabilir hedef ölçüsü ve puan kalibrasyonu
 - Kalıcı seri kaydı ve CSV/PDF dışa aktarma
 - PWA çevrimdışı çalışma
+
+
+## Zoom notu
+
+Zoomu hedef köşelerini seçmeden önce ayarla. Zoom değiştirilirse köşe kalibrasyonu ve temiz referans otomatik sıfırlanır.

@@ -19,7 +19,8 @@
     <section class="grid">
       <div class="card">
         <div id="videoStage" class="video-stage">
-          <video id="video" autoplay playsinline muted></video>
+          <video id="video" autoplay playsinline muted class="hidden"></video>
+          <canvas id="cameraPreview"></canvas>
           <canvas id="overlay"></canvas>
         </div>
 
@@ -43,6 +44,13 @@
         <h2>Canlı sensör</h2>
         <label>Ses seviyesi</label>
         <input id="audioMeter" type="range" min="0" max="100" value="0" disabled>
+
+        <label style="margin-top:14px">Kamera yakınlaştırma</label>
+        <input id="zoomRange" type="range" min="1" max="4" step="0.1" value="1" disabled>
+        <p class="muted small">
+          Dijital zoom: <span id="zoomText">1.0</span>x
+          <br>Zoomu köşeleri seçmeden önce ayarla.
+        </p>
 
         <label style="margin-top:14px">Algılama eşiği</label>
         <input id="thresholdRange" type="range" min="3" max="65" value="22">
