@@ -93,3 +93,19 @@ Zoomu hedef köşelerini seçmeden önce ayarla. Zoom değiştirilirse köşe ka
 ## Hedef merkezi kalibrasyonu
 
 Kâğıt hedeflerde nişan merkezi çoğu zaman kartın geometrik ortasında değildir. Bu sürümde temiz hedef kaydedildikten sonra “Hedef merkezini seç” düğmesine basılır ve düzeltilmiş görüntüde 10 halkasının tam ortasına dokunulur. Atış koordinatları bu noktaya göre yeniden merkezlenir; böylece 9 bölgesindeki bir işaretin 7 olarak hesaplanması önlenir.
+
+
+## Halka referansı kalibrasyonu
+
+Yeni kullanım sırası:
+
+1. Hedefin dört köşesini seç.
+2. Temiz hedefi kaydet.
+3. 10 halkasının tam merkezine dokun.
+4. 9 halka çizgisinin bir noktasına dokun.
+5. 8 halka çizgisinin bir noktasına dokun.
+6. 7 halka çizgisinin bir noktasına dokun.
+7. Sistem kalan halkaları otomatik hesaplar.
+
+Kalibrasyon kutusunda üç seçimin piksel yarıçapları ve tahmini hata kalitesi gösterilir.
+Merkezden uzaklık sırası `9 < 8 < 7` değilse sistem kalibrasyonu kabul etmez.

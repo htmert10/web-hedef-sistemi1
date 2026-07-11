@@ -15,6 +15,9 @@ const startBtn = document.getElementById("startBtn");
 const resetCornersBtn = document.getElementById("resetCornersBtn");
 const referenceBtn = document.getElementById("referenceBtn");
 const centerBtn = document.getElementById("centerBtn");
+const ring9Btn = document.getElementById("ring9Btn");
+const ring8Btn = document.getElementById("ring8Btn");
+const ring7Btn = document.getElementById("ring7Btn");
 const learnSoundBtn = document.getElementById("learnSoundBtn");
 const armBtn = document.getElementById("armBtn");
 const testBtn = document.getElementById("testBtn");
@@ -29,6 +32,10 @@ const connectionState = document.getElementById("connectionState");
 const manualPanel = document.getElementById("manualPanel");
 const confirmSuggestedBtn = document.getElementById("confirmSuggestedBtn");
 const cancelManualBtn = document.getElementById("cancelManualBtn");
+const ring9Value = document.getElementById("ring9Value");
+const ring8Value = document.getElementById("ring8Value");
+const ring7Value = document.getElementById("ring7Value");
+const calibrationQuality = document.getElementById("calibrationQuality");
 
 const captureCanvas = document.createElement("canvas");
 const captureCtx = captureCanvas.getContext("2d", { willReadFrequently: true });
@@ -53,6 +60,10 @@ let lastRawCaptureAt = 0;
 let softwareZoom = 1;
 let targetCenter = null;
 let centerSelectionMode = false;
+let ringSelectionMode = null;
+let ringReferences = { 9: null, 8: null, 7: null };
+let calibrationScale = 1;
+let calibrationReady = false;
 
 function setStatus(text, level = "") {
   statusBox.className = `status ${level}`.trim();
@@ -63,42 +74,277 @@ function clamp01(value) {
   return Math.max(0, Math.min(1, value));
 }
 
+function visibleRingRadiusMm(score) {
+  return (11 - score) * 8 - 2.25;
+}
+
+function expectedRingRadiusNormalized(score) {
+  return visibleRingRadiusMm(score) / 170;
+}
+
+function setRingButtonsEnabled(enabled) {
+  ring9Btn.disabled = !enabled;
+  ring8Btn.disabled = !enabled;
+  ring7Btn.disabled = !enabled;
+}
+
+function resetRingCalibration() {
+  ringSelectionMode = null;
+  ringReferences = { 9: null, 8: null, 7: null };
+  calibrationScale = 1;
+  calibrationReady = false;
+
+  ring9Btn.textContent = "5. 9 halkasını seç";
+  ring8Btn.textContent = "6. 8 halkasını seç";
+  ring7Btn.textContent = "7. 7 halkasını seç";
+
+  ring9Value.textContent = "Seçilmedi";
+  ring8Value.textContent = "Seçilmedi";
+  ring7Value.textContent = "Seçilmedi";
+  calibrationQuality.textContent = "Halka ölçeği henüz hazır değil.";
+}
+
+function updateRingValue(score, point) {
+  const element = score === 9 ? ring9Value : score === 8 ? ring8Value : ring7Value;
+  if (!point) {
+    element.textContent = "Seçilmedi";
+    return;
+  }
+  element.textContent = `${Math.round(point.radius * CANONICAL_SIZE)} px`;
+}
+
+function calculateRingCalibration() {
+  const scores = [9, 8, 7];
+  const entries = scores
+    .map((score) => ({ score, point: ringReferences[score] }))
+    .filter((entry) => entry.point);
+
+  if (entries.length < 3) {
+    calibrationReady = false;
+    armBtn.disabled = true;
+    calibrationQuality.textContent =
+      `${entries.length}/3 halka seçildi. 9, 8 ve 7 halkalarının üçü de gerekli.`;
+    return false;
+  }
+
+  const r9 = ringReferences[9].radius;
+  const r8 = ringReferences[8].radius;
+  const r7 = ringReferences[7].radius;
+
+  if (!(r9 < r8 && r8 < r7)) {
+    calibrationReady = false;
+    armBtn.disabled = true;
+    calibrationQuality.textContent =
+      "Halka sırası hatalı görünüyor. Merkezden uzaklık 9 < 8 < 7 olmalı.";
+    return false;
+  }
+
+  let numerator = 0;
+  let denominator = 0;
+
+  for (const { score, point } of entries) {
+    const expected = expectedRingRadiusNormalized(score);
+    numerator += point.radius * expected;
+    denominator += point.radius * point.radius;
+  }
+
+  if (denominator <= 1e-9) {
+    calibrationReady = false;
+    armBtn.disabled = true;
+    calibrationQuality.textContent = "Halka ölçeği hesaplanamadı.";
+    return false;
+  }
+
+  calibrationScale = numerator / denominator;
+
+  const residualsMm = entries.map(({ score, point }) => {
+    const expected = expectedRingRadiusNormalized(score);
+    const predicted = point.radius * calibrationScale;
+    return Math.abs(predicted - expected) * 170;
+  });
+
+  const maxErrorMm = Math.max(...residualsMm);
+  const averageErrorMm =
+    residualsMm.reduce((total, value) => total + value, 0) / residualsMm.length;
+
+  calibrationReady = true;
+  armBtn.disabled = false;
+
+  let quality = "İyi";
+  if (maxErrorMm > 2.5) quality = "Zayıf";
+  else if (maxErrorMm > 1.2) quality = "Orta";
+
+  calibrationQuality.textContent =
+    `Kalibrasyon hazır · kalite: ${quality} · ortalama hata: ${averageErrorMm.toFixed(1)} mm`;
+
+  return true;
+}
+
 function toTargetCoordinates(paperX, paperY) {
   const center = targetCenter || { x: 0.5, y: 0.5 };
+  const scale = calibrationReady ? calibrationScale : 1;
+
   return {
-    x: clamp01(0.5 + (paperX - center.x)),
-    y: clamp01(0.5 + (paperY - center.y))
+    x: clamp01(0.5 + (paperX - center.x) * scale),
+    y: clamp01(0.5 + (paperY - center.y) * scale)
   };
 }
 
 function toPaperCoordinates(targetX, targetY) {
   const center = targetCenter || { x: 0.5, y: 0.5 };
+  const scale = calibrationReady && calibrationScale > 1e-9
+    ? calibrationScale
+    : 1;
+
   return {
-    x: clamp01(center.x + (targetX - 0.5)),
-    y: clamp01(center.y + (targetY - 0.5))
+    x: clamp01(center.x + (targetX - 0.5) / scale),
+    y: clamp01(center.y + (targetY - 0.5) / scale)
   };
 }
 
-function drawTargetCenterMarker() {
+function drawCalibrationOverlay() {
   if (!targetCenter) return;
-  const x = targetCenter.x * warpedPreview.width;
-  const y = targetCenter.y * warpedPreview.height;
+
+  const centerX = targetCenter.x * warpedPreview.width;
+  const centerY = targetCenter.y * warpedPreview.height;
 
   warpedCtx.save();
+
+  if (calibrationReady && calibrationScale > 1e-9) {
+    warpedCtx.setLineDash([7, 6]);
+    warpedCtx.lineWidth = 1.5;
+    warpedCtx.strokeStyle = "rgba(77, 163, 255, .72)";
+
+    for (let score = 10; score >= 1; score--) {
+      const normalizedRadius =
+        expectedRingRadiusNormalized(score) / calibrationScale;
+      const radiusPx = normalizedRadius * warpedPreview.width;
+
+      warpedCtx.beginPath();
+      warpedCtx.arc(centerX, centerY, radiusPx, 0, Math.PI * 2);
+      warpedCtx.stroke();
+    }
+
+    warpedCtx.setLineDash([]);
+  }
+
+  const selectedStyles = {
+    9: "#4ade80",
+    8: "#fbbf24",
+    7: "#fb7185"
+  };
+
+  for (const score of [9, 8, 7]) {
+    const point = ringReferences[score];
+    if (!point) continue;
+
+    const pointX = point.x * warpedPreview.width;
+    const pointY = point.y * warpedPreview.height;
+
+    warpedCtx.strokeStyle = selectedStyles[score];
+    warpedCtx.fillStyle = selectedStyles[score];
+    warpedCtx.lineWidth = 3;
+
+    warpedCtx.beginPath();
+    warpedCtx.arc(
+      centerX,
+      centerY,
+      point.radius * warpedPreview.width,
+      0,
+      Math.PI * 2
+    );
+    warpedCtx.stroke();
+
+    warpedCtx.beginPath();
+    warpedCtx.arc(pointX, pointY, 7, 0, Math.PI * 2);
+    warpedCtx.fill();
+
+    warpedCtx.font = "bold 16px system-ui";
+    warpedCtx.fillText(String(score), pointX + 10, pointY - 10);
+  }
+
   warpedCtx.strokeStyle = "#ff3b6b";
   warpedCtx.fillStyle = "rgba(255,59,107,.18)";
   warpedCtx.lineWidth = 3;
   warpedCtx.beginPath();
-  warpedCtx.arc(x, y, 13, 0, Math.PI * 2);
+  warpedCtx.arc(centerX, centerY, 13, 0, Math.PI * 2);
   warpedCtx.fill();
   warpedCtx.stroke();
+
   warpedCtx.beginPath();
-  warpedCtx.moveTo(x - 22, y);
-  warpedCtx.lineTo(x + 22, y);
-  warpedCtx.moveTo(x, y - 22);
-  warpedCtx.lineTo(x, y + 22);
+  warpedCtx.moveTo(centerX - 22, centerY);
+  warpedCtx.lineTo(centerX + 22, centerY);
+  warpedCtx.moveTo(centerX, centerY - 22);
+  warpedCtx.lineTo(centerX, centerY + 22);
   warpedCtx.stroke();
+
   warpedCtx.restore();
+}
+
+function beginRingSelection(score) {
+  if (!referenceFrame || !targetCenter) {
+    setStatus("Önce temiz hedefi kaydet ve hedef merkezini seç.", "warn");
+    return;
+  }
+
+  detectorArmed = false;
+  armBtn.textContent = "9. Sistemi hazırla";
+  armBtn.className = "";
+  ringSelectionMode = score;
+
+  setStatus(
+    `Düzeltilmiş hedefte ${score} halka çizgisinin herhangi bir noktasına dokun.`,
+    "warn"
+  );
+}
+
+function saveRingReference(score, x, y) {
+  if (!targetCenter) return;
+
+  const dx = x - targetCenter.x;
+  const dy = y - targetCenter.y;
+  const radius = Math.hypot(dx, dy);
+
+  if (radius < 0.015) {
+    setStatus("Seçilen nokta merkeze fazla yakın. Halka çizgisinin üstüne dokun.", "warn");
+    return;
+  }
+
+  ringReferences[score] = { x, y, radius };
+  ringSelectionMode = null;
+
+  updateRingValue(score, ringReferences[score]);
+
+  if (score === 9) ring9Btn.textContent = "5. 9 halkasını yeniden seç";
+  if (score === 8) ring8Btn.textContent = "6. 8 halkasını yeniden seç";
+  if (score === 7) ring7Btn.textContent = "7. 7 halkasını yeniden seç";
+
+  if (referenceFrame) {
+    warpedCtx.putImageData(referenceFrame, 0, 0);
+    drawCalibrationOverlay();
+  }
+
+  const ready = calculateRingCalibration();
+
+  if (ready) {
+    setStatus(
+      "9, 8 ve 7 halkaları kaydedildi. Diğer halkalar otomatik hesaplandı.",
+      "ok"
+    );
+    send({
+      type: "sensor_event",
+      message: "Halka ölçeği kalibre edildi. Puanlama yeni ölçeğe göre hazır.",
+      level: "info"
+    });
+  } else {
+    const nextMissing = [9, 8, 7].find((value) => !ringReferences[value]);
+    if (nextMissing) {
+      setStatus(
+        `${score} halkası kaydedildi. Şimdi ${nextMissing} halka çizgisini seç.`,
+        "ok"
+      );
+    }
+  }
 }
 
 function wsUrl() {
@@ -338,7 +584,9 @@ function resetCorners() {
   centerSelectionMode = false;
   detectorArmed = false;
   centerBtn.disabled = true;
-  armBtn.textContent = "6. Sistemi hazırla";
+  setRingButtonsEnabled(false);
+  resetRingCalibration();
+  armBtn.textContent = "9. Sistemi hazırla";
   armBtn.disabled = true;
   manualPanel.classList.add("hidden");
   drawOverlay();
@@ -452,7 +700,7 @@ function previewWarp(rawFrame) {
   try {
     const warped = warpFrame(rawFrame);
     warpedCtx.putImageData(warped, 0, 0);
-    drawTargetCenterMarker();
+    drawCalibrationOverlay();
     return warped;
   } catch (error) {
     setStatus(error.message, "danger");
@@ -467,6 +715,8 @@ function saveReference() {
 
   targetCenter = null;
   centerSelectionMode = false;
+  resetRingCalibration();
+  setRingButtonsEnabled(false);
   centerBtn.disabled = false;
   armBtn.disabled = true;
   setStatus(
@@ -500,13 +750,16 @@ async function learnSound() {
 }
 
 function toggleArm() {
-  if (!referenceFrame || corners.length !== 4 || !targetCenter) {
-    setStatus("Önce köşeleri seç, temiz hedefi kaydet ve hedef merkezini işaretle.", "warn");
+  if (!referenceFrame || corners.length !== 4 || !targetCenter || !calibrationReady) {
+    setStatus(
+      "Önce köşeleri, temiz hedefi, merkezi ve 9-8-7 halka referanslarını tamamla.",
+      "warn"
+    );
     return;
   }
 
   detectorArmed = !detectorArmed;
-  armBtn.textContent = detectorArmed ? "Sistemi durdur" : "6. Sistemi hazırla";
+  armBtn.textContent = detectorArmed ? "Sistemi durdur" : "9. Sistemi hazırla";
   armBtn.className = detectorArmed ? "danger" : "";
   setStatus(
     detectorArmed
@@ -713,7 +966,7 @@ async function triggerShotPipeline() {
   const beforeWarped = warpFrame(beforeRaw);
   const afterWarped = warpFrame(afterRaw);
   warpedCtx.putImageData(afterWarped, 0, 0);
-  drawTargetCenterMarker();
+  drawCalibrationOverlay();
 
   const candidate = findNewHole(beforeWarped, afterWarped);
 
@@ -779,15 +1032,24 @@ warpedPreview.addEventListener("pointerdown", (event) => {
     targetCenter = { x, y };
     centerSelectionMode = false;
     centerBtn.textContent = "4. Merkezi yeniden seç";
-    armBtn.disabled = false;
+    resetRingCalibration();
+    setRingButtonsEnabled(true);
+    armBtn.disabled = true;
+
     if (referenceFrame) {
       warpedCtx.putImageData(referenceFrame, 0, 0);
-      drawTargetCenterMarker();
+      drawCalibrationOverlay();
     }
+
     setStatus(
-      "Hedef merkezi kaydedildi. Puan artık kâğıdın ortasına göre değil bu noktaya göre hesaplanacak.",
+      "Hedef merkezi kaydedildi. Şimdi 9, 8 ve 7 halka çizgilerini seç.",
       "ok"
     );
+    return;
+  }
+
+  if (ringSelectionMode !== null) {
+    saveRingReference(ringSelectionMode, x, y);
     return;
   }
 
@@ -816,11 +1078,24 @@ centerBtn.addEventListener("click", () => {
     setStatus("Önce temiz hedefi kaydet.", "warn");
     return;
   }
+
   centerSelectionMode = true;
+  ringSelectionMode = null;
   detectorArmed = false;
-  armBtn.textContent = "6. Sistemi hazırla";
-  setStatus("Düzeltilmiş hedefte 10 halkasının tam merkezine bir kez dokun.", "warn");
+  resetRingCalibration();
+  setRingButtonsEnabled(false);
+  armBtn.textContent = "9. Sistemi hazırla";
+  armBtn.disabled = true;
+
+  setStatus(
+    "Düzeltilmiş hedefte 10 halkasının tam merkezine bir kez dokun.",
+    "warn"
+  );
 });
+
+ring9Btn.addEventListener("click", () => beginRingSelection(9));
+ring8Btn.addEventListener("click", () => beginRingSelection(8));
+ring7Btn.addEventListener("click", () => beginRingSelection(7));
 
 zoomRange.addEventListener("input", () => {
   softwareZoom = Number(zoomRange.value);
@@ -832,10 +1107,13 @@ zoomRange.addEventListener("input", () => {
     referenceFrame = null;
     targetCenter = null;
     centerSelectionMode = false;
+    ringSelectionMode = null;
     detectorArmed = false;
     centerBtn.disabled = true;
     centerBtn.textContent = "4. Hedef merkezini seç";
-    armBtn.textContent = "6. Sistemi hazırla";
+    setRingButtonsEnabled(false);
+    resetRingCalibration();
+    armBtn.textContent = "9. Sistemi hazırla";
     armBtn.className = "";
     armBtn.disabled = true;
     manualPanel.classList.add("hidden");

@@ -31,8 +31,11 @@
           <button id="resetCornersBtn" disabled>2. Köşeleri sıfırla</button>
           <button id="referenceBtn" disabled class="ok">3. Temiz hedefi kaydet</button>
           <button id="centerBtn" disabled class="warn">4. Hedef merkezini seç</button>
-          <button id="learnSoundBtn" disabled class="warn">5. Sesi öğret</button>
-          <button id="armBtn" disabled>6. Sistemi hazırla</button>
+          <button id="ring9Btn" disabled>5. 9 halkasını seç</button>
+          <button id="ring8Btn" disabled>6. 8 halkasını seç</button>
+          <button id="ring7Btn" disabled>7. 7 halkasını seç</button>
+          <button id="learnSoundBtn" disabled class="warn">8. Sesi öğret</button>
+          <button id="armBtn" disabled>9. Sistemi hazırla</button>
           <button id="testBtn" disabled>Test tetikle</button>
         </div>
 
@@ -65,9 +68,19 @@
         <h2 style="margin-top:18px">Düzeltilmiş hedef</h2>
         <canvas id="warpedPreview" class="preview-canvas" width="500" height="500"></canvas>
         <p class="muted small">
-          Temiz hedefi kaydettikten sonra “Hedef merkezini seç”e basıp 10 halkasının tam ortasına dokun.
-          Şüpheli üst üste atışta yine bu hedefe dokunarak konumu elle seçebilirsin.
+          Önce 10 halkasının tam merkezini seç. Ardından 9, 8 ve 7 halka çizgilerinin herhangi bir noktasına
+          sırayla dokun. Sistem diğer halkaları otomatik hesaplar.
+          Şüpheli algılamada yine bu hedefe dokunarak konumu elle seçebilirsin.
         </p>
+
+        <div class="calibration-box">
+          <div><span>9 halkası</span><strong id="ring9Value">Seçilmedi</strong></div>
+          <div><span>8 halkası</span><strong id="ring8Value">Seçilmedi</strong></div>
+          <div><span>7 halkası</span><strong id="ring7Value">Seçilmedi</strong></div>
+          <p id="calibrationQuality" class="muted small">
+            Halka ölçeği henüz hazır değil.
+          </p>
+        </div>
 
         <div id="manualPanel" class="hidden">
           <div class="status warn">

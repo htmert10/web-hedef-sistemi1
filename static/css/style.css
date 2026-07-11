@@ -237,3 +237,32 @@ th, td {
 .video-stage #video {
   display: none;
 }
+
+
+.calibration-box {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: #101720;
+}
+
+.calibration-box > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(154, 171, 192, .14);
+}
+
+.calibration-box > div:last-of-type {
+  border-bottom: 0;
+}
+
+.calibration-box strong {
+  font-size: .9rem;
+}
+
+.calibration-box p {
+  margin: 10px 0 0;
+}
