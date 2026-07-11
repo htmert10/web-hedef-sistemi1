@@ -1028,62 +1028,68 @@ function findOverlapSuggestion(before, after) {
 }
 
 async function triggerShotPipeline() {
-  if (triggerLocked || !referenceFrame || corners.length !== 4) return;
+  if (triggerLocked || !referenceFrame || corners.length !== 4) {
+    console.log("Trigger engellendi (zaten kilitli veya hazır değil)");
+    return;
+  }
   
   triggerLocked = true;
-  console.log("🔫 Trigger başladı - shot pipeline");
+  console.log("🔫 Trigger başladı");
 
-  send({
-    type: "sensor_event",
-    message: "Tanımlı ses algılandı. Görüntüler karşılaştırılıyor...",
-    level: "info"
-  });
-
-  setStatus("Atış olayı algılandı. Önceki ve sonraki görüntü karşılaştırılıyor.", "warn");
+  setStatus("Atış algılandı, işleniyor...", "warn");
 
   try {
     const beforeRaw = lastRawFrames[Math.max(0, lastRawFrames.length - 3)] || captureRawFrame();
 
-    await new Promise((resolve) => setTimeout(resolve, 650));
+    await new Promise(resolve => setTimeout(resolve, 400)); // 650'den azalttık
 
     const afterRaw = captureRawFrame();
-    const beforeWarped = warpFrame(beforeRaw);
-    const afterWarped = warpFrame(afterRaw);
     
-    warpedCtx.putImageData(afterWarped, 0, 0);
-    drawCalibrationOverlay();
+    // Warped işlemini dene, hata olursa yakala
+    let beforeWarped, afterWarped;
+    try {
+      beforeWarped = warpFrame(beforeRaw);
+      afterWarped = warpFrame(afterRaw);
+      warpedCtx.putImageData(afterWarped, 0, 0);
+      drawCalibrationOverlay();
+    } catch (warpError) {
+      console.error("Warp hatası:", warpError);
+      throw new Error("Perspektif düzeltme hatası");
+    }
 
     const candidate = findNewHole(beforeWarped, afterWarped);
 
-    if (candidate) {
+    if (candidate && candidate.confidence > 0.4) {
       const targetPoint = toTargetCoordinates(candidate.x, candidate.y);
       
-      console.log(`✅ Delik bulundu, gönderiliyor: (${targetPoint.x.toFixed(3)}, ${targetPoint.y.toFixed(3)})`);
+      console.log(`✅ Delik tespit edildi → X:${targetPoint.x.toFixed(3)} Y:${targetPoint.y.toFixed(3)}`);
 
       send({
         type: "shot",
         x: targetPoint.x,
         y: targetPoint.y,
-        confidence: candidate.confidence,
+        confidence: Math.min(0.95, candidate.confidence),
         status: "confirmed",
         source: "camera"
       });
 
       referenceFrame = afterWarped;
-      setStatus(`Yeni delik bulundu. Güven: %${Math.round(candidate.confidence * 100)}.`, "ok");
+      setStatus(`Yeni delik bulundu (${Math.round(candidate.confidence*100)}% güven)`, "ok");
     } else {
-      // ... mevcut kod aynı kalabilir
-      console.log("❌ Yeni delik bulunamadı, manuel moda geçiliyor");
-      // mevcut else bloğu
+      console.log("❌ Kesin delik bulunamadı, manuel moda geçiliyor");
+      candidateSuggestion = { x: 0.5, y: 0.5, confidence: 0.3 };
+      manualPanel.classList.remove("hidden");
+      setStatus("Yeni delik kesin bulunamadı. Hedefe dokunarak konum seç.", "warn");
     }
+
   } catch (error) {
-    console.error("Trigger hatası:", error);
-    setStatus("Atış işlenirken hata oluştu.", "danger");
+    console.error("🚨 Trigger pipeline hatası:", error);
+    setStatus("Atış işlenirken teknik hata oluştu. Tekrar dene.", "danger");
   } finally {
     setTimeout(() => {
       triggerLocked = false;
-      console.log("🔓 Trigger kilidi açıldı");
-    }, 1200);
+      console.log("🔓 Trigger kilit açıldı");
+    }, 1500);
   }
 }
 
