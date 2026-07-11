@@ -83,9 +83,21 @@ function expectedRingRadiusNormalized(score) {
 }
 
 function setRingButtonsEnabled(enabled) {
-  ring9Btn.disabled = !enabled;
-  ring8Btn.disabled = !enabled;
-  ring7Btn.disabled = !enabled;
+  const buttons = [ring9Btn, ring8Btn, ring7Btn];
+
+  for (const button of buttons) {
+    if (!button) continue;
+
+    button.disabled = !enabled;
+
+    if (enabled) {
+      button.removeAttribute("disabled");
+      button.setAttribute("aria-disabled", "false");
+    } else {
+      button.setAttribute("disabled", "");
+      button.setAttribute("aria-disabled", "true");
+    }
+  }
 }
 
 function resetRingCalibration() {
@@ -1034,6 +1046,11 @@ warpedPreview.addEventListener("pointerdown", (event) => {
     centerBtn.textContent = "4. Merkezi yeniden seç";
     resetRingCalibration();
     setRingButtonsEnabled(true);
+
+    // Mobil tarayıcı önbelleği / DOM senkronizasyonuna karşı ikinci güvence.
+    requestAnimationFrame(() => setRingButtonsEnabled(true));
+    setTimeout(() => setRingButtonsEnabled(true), 100);
+
     armBtn.disabled = true;
 
     if (referenceFrame) {
@@ -1042,7 +1059,7 @@ warpedPreview.addEventListener("pointerdown", (event) => {
     }
 
     setStatus(
-      "Hedef merkezi kaydedildi. Şimdi 9, 8 ve 7 halka çizgilerini seç.",
+      "Hedef merkezi kaydedildi. 9, 8 ve 7 halka butonları etkinleştirildi. [FIX-2]",
       "ok"
     );
     return;
