@@ -66,6 +66,29 @@ let ringCalibrationPoints = { top: null, right: null, bottom: null, left: null }
 let affineTransform = null;
 let calibrationReady = false;
 
+// Güvenli kalem noktası / etiket değişikliği algılama durumu.
+const MEDIAN_FRAME_COUNT = 5;
+const FRAME_INTERVAL_MS = 85;
+const MAX_ALIGNMENT_SHIFT = 6;
+const MIN_CONFIDENCE_TO_SEND = 0.58;
+const TRIGGER_COOLDOWN_MS = 1800;
+
+// Güvenli işaret algılama V2:
+// koyu/açık bölgeye göre dinamik duyarlılık ve hedef-içi ROI.
+const DARK_REFERENCE_CUTOFF = 118;
+const BLACK_TO_OUTER_ROI_RATIO = 2.62;
+const ROI_EDGE_PADDING_PX = 8;
+const LOCAL_MEAN_BLOCK_SIZE = 31;
+const DARK_LOCAL_OFFSET = 2;
+const LIGHT_LOCAL_OFFSET = 5;
+const MERGED_AREA_THRESHOLD = 360;
+const MAX_COMPONENT_AREA = 5200;
+
+let referenceMedianGray = null;
+let pendingMedianGray = null;
+let pendingPreviewFrame = null;
+let lastTriggerAt = 0;
+
 function setStatus(text, level = "") {
   statusBox.className = `status ${level}`.trim();
   statusBox.textContent = text;
@@ -73,6 +96,68 @@ function setStatus(text, level = "") {
 
 function clamp01(value) {
   return Math.max(0, Math.min(1, value));
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function ensureOpenCvReady(timeoutMs = 20000) {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    let candidate = window.cv;
+
+    if (candidate instanceof Promise) {
+      try {
+        candidate = await candidate;
+        window.cv = candidate;
+      } catch (error) {
+        throw new Error(`OpenCV yüklenemedi: ${error.message || error}`);
+      }
+    }
+
+    if (candidate && typeof candidate.Mat === "function") {
+      return candidate;
+    }
+
+    await delay(100);
+  }
+
+  throw new Error(
+    "OpenCV.js yüklenemedi. İnternet bağlantısını kontrol edip sayfayı yenile."
+  );
+}
+
+function deleteMat(mat) {
+  if (mat && typeof mat.delete === "function") {
+    mat.delete();
+  }
+}
+
+function replaceReferenceMedian(nextMat) {
+  deleteMat(referenceMedianGray);
+  referenceMedianGray = nextMat;
+}
+
+function clearPendingDetection() {
+  deleteMat(pendingMedianGray);
+  pendingMedianGray = null;
+  pendingPreviewFrame = null;
+  candidateSuggestion = null;
+  confirmSuggestedBtn.disabled = true;
+}
+
+function commitPendingReference() {
+  if (pendingMedianGray) {
+    replaceReferenceMedian(pendingMedianGray.clone());
+  }
+
+  if (pendingPreviewFrame) {
+    referenceFrame = pendingPreviewFrame;
+  }
+
+  clearPendingDetection();
 }
 
 function visibleRingRadiusMm(score) {
@@ -577,8 +662,14 @@ function startLoop() {
       learnedPeak = Math.max(learnedPeak, rms);
     }
 
-    if (detectorArmed && !triggerLocked && rms >= learnedThreshold) {
-      triggerShotPipeline();
+    if (
+      detectorArmed &&
+      !triggerLocked &&
+      rms >= learnedThreshold &&
+      time - lastTriggerAt >= TRIGGER_COOLDOWN_MS
+    ) {
+      lastTriggerAt = time;
+      triggerProcessPipeline();
     }
 
     if (time - lastRawCaptureAt > 120 && video.readyState >= 2) {
@@ -651,6 +742,8 @@ overlay.addEventListener("pointerdown", (event) => {
 function resetCorners() {
   corners = [];
   referenceFrame = null;
+  replaceReferenceMedian(null);
+  clearPendingDetection();
   targetCenter = null;
   centerSelectionMode = false;
   detectorArmed = false;
@@ -779,21 +872,116 @@ function previewWarp(rawFrame) {
   }
 }
 
-function saveReference() {
-  const raw = captureRawFrame();
-  referenceFrame = previewWarp(raw);
-  if (!referenceFrame) return;
+async function collectRawFrames(
+  count = MEDIAN_FRAME_COUNT,
+  intervalMs = FRAME_INTERVAL_MS
+) {
+  const frames = [];
 
-  targetCenter = null;
-  centerSelectionMode = false;
-  resetAffineCalibration();
-  setRingCalibrationEnabled(false);
-  centerBtn.disabled = false;
-  armBtn.disabled = true;
-  setStatus(
-    "Temiz hedef kaydedildi. Şimdi hedef merkezini seç ve 10 halkasının tam ortasına dokun.",
-    "ok"
+  for (let index = 0; index < count; index++) {
+    frames.push(captureRawFrame());
+    if (index < count - 1) await delay(intervalMs);
+  }
+
+  return frames;
+}
+
+function imageDataToGrayBuffer(imageData) {
+  const pixelCount = imageData.width * imageData.height;
+  const gray = new Uint8Array(pixelCount);
+  const source = imageData.data;
+
+  for (let pixel = 0; pixel < pixelCount; pixel++) {
+    const offset = pixel * 4;
+    gray[pixel] = Math.round(
+      source[offset] * 0.299 +
+      source[offset + 1] * 0.587 +
+      source[offset + 2] * 0.114
+    );
+  }
+
+  return gray;
+}
+
+function medianOfValues(values) {
+  values.sort((a, b) => a - b);
+  return values[Math.floor(values.length / 2)];
+}
+
+function buildMedianWarpedGray(rawFrames) {
+  if (!rawFrames || rawFrames.length < 3) {
+    throw new Error("Medyan görüntü için en az 3 kare gerekli.");
+  }
+
+  const warpedFrames = rawFrames.map((frame) => warpFrame(frame));
+  const grayBuffers = warpedFrames.map(imageDataToGrayBuffer);
+  const pixelCount = CANONICAL_SIZE * CANONICAL_SIZE;
+  const output = new cv.Mat(
+    CANONICAL_SIZE,
+    CANONICAL_SIZE,
+    cv.CV_8UC1
   );
+
+  const samples = new Array(grayBuffers.length);
+
+  for (let pixel = 0; pixel < pixelCount; pixel++) {
+    for (let frameIndex = 0; frameIndex < grayBuffers.length; frameIndex++) {
+      samples[frameIndex] = grayBuffers[frameIndex][pixel];
+    }
+    output.data[pixel] = medianOfValues(samples);
+  }
+
+  return {
+    gray: output,
+    preview: warpedFrames[warpedFrames.length - 1]
+  };
+}
+
+async function saveReference() {
+  if (corners.length !== 4) {
+    setStatus("Önce hedefin dört köşesini seç.", "warn");
+    return;
+  }
+
+  referenceBtn.disabled = true;
+
+  try {
+    await ensureOpenCvReady();
+    setStatus(
+      `${MEDIAN_FRAME_COUNT} sabit kareden temiz referans hazırlanıyor...`,
+      "warn"
+    );
+
+    const rawFrames = await collectRawFrames();
+    const median = buildMedianWarpedGray(rawFrames);
+
+    replaceReferenceMedian(median.gray);
+    clearPendingDetection();
+
+    referenceFrame = median.preview;
+    warpedCtx.putImageData(referenceFrame, 0, 0);
+    drawCalibrationOverlay();
+
+    targetCenter = null;
+    centerSelectionMode = false;
+    resetAffineCalibration();
+    setRingCalibrationEnabled(false);
+    centerBtn.disabled = false;
+    armBtn.disabled = true;
+
+    setStatus(
+      "Kararlı medyan referans kaydedildi. Şimdi hedef merkezini seç.",
+      "ok"
+    );
+  } catch (error) {
+    console.error(error);
+    setStatus(
+      `Referans oluşturulamadı: ${error.message || error}`,
+      "danger"
+    );
+  } finally {
+    referenceBtn.disabled = corners.length !== 4;
+  }
 }
 
 async function learnSound() {
@@ -840,237 +1028,743 @@ function toggleArm() {
   );
 }
 
-function grayAt(data, pixelIndex) {
-  const i = pixelIndex * 4;
-  return data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+function sampledShiftError(
+  referenceGray,
+  currentGray,
+  dx,
+  dy,
+  step = 4
+) {
+  const width = referenceGray.cols;
+  const height = referenceGray.rows;
+  const referenceData = referenceGray.data;
+  const currentData = currentGray.data;
+
+  const margin = MAX_ALIGNMENT_SHIFT + 4;
+  let total = 0;
+  let count = 0;
+
+  for (let y = margin; y < height - margin; y += step) {
+    const sourceY = y - dy;
+    if (sourceY < 0 || sourceY >= height) continue;
+
+    for (let x = margin; x < width - margin; x += step) {
+      const sourceX = x - dx;
+      if (sourceX < 0 || sourceX >= width) continue;
+
+      const referenceIndex = y * width + x;
+      const currentIndex = sourceY * width + sourceX;
+
+      total += Math.abs(
+        referenceData[referenceIndex] - currentData[currentIndex]
+      );
+      count++;
+    }
+  }
+
+  return count ? total / count : Number.POSITIVE_INFINITY;
 }
 
-function findNewHole(before, after) {
-  const width = CANONICAL_SIZE;
-  const height = CANONICAL_SIZE;
-  const count = width * height;
-  const deltas = new Float32Array(count);
+function shiftGrayMat(source, dx, dy) {
+  const result = new cv.Mat();
+  const transform = cv.matFromArray(2, 3, cv.CV_64F, [
+    1, 0, dx,
+    0, 1, dy
+  ]);
 
-  let globalDelta = 0;
-  for (let p = 0; p < count; p++) {
-    const delta = grayAt(before.data, p) - grayAt(after.data, p);
-    deltas[p] = delta;
-    globalDelta += delta;
-  }
-  globalDelta /= count;
-
-  const mask = new Uint8Array(count);
-  const rawThreshold = 18;
-
-  for (let y = 2; y < height - 2; y++) {
-    for (let x = 2; x < width - 2; x++) {
-      const p = y * width + x;
-      const adjusted = deltas[p] - globalDelta;
-      const afterGray = grayAt(after.data, p);
-      if (adjusted > rawThreshold && afterGray < 185) mask[p] = 1;
-    }
-  }
-
-  const cleaned = new Uint8Array(count);
-  for (let y = 2; y < height - 2; y++) {
-    for (let x = 2; x < width - 2; x++) {
-      const p = y * width + x;
-      if (!mask[p]) continue;
-      let neighbors = 0;
-      for (let yy = -1; yy <= 1; yy++) {
-        for (let xx = -1; xx <= 1; xx++) {
-          neighbors += mask[(y + yy) * width + (x + xx)];
-        }
-      }
-      if (neighbors >= 3) cleaned[p] = 1;
-    }
-  }
-
-  const visited = new Uint8Array(count);
-  const queue = new Int32Array(count);
-  let best = null;
-
-  for (let start = 0; start < count; start++) {
-    if (!cleaned[start] || visited[start]) continue;
-
-    let head = 0;
-    let tail = 0;
-    queue[tail++] = start;
-    visited[start] = 1;
-
-    let area = 0;
-    let sumX = 0;
-    let sumY = 0;
-    let sumWeight = 0;
-    let sumDelta = 0;
-    let minX = width, minY = height, maxX = 0, maxY = 0;
-
-    while (head < tail) {
-      const p = queue[head++];
-      const y = Math.floor(p / width);
-      const x = p - y * width;
-      const weight = Math.max(1, deltas[p] - globalDelta);
-
-      area++;
-      sumX += x * weight;
-      sumY += y * weight;
-      sumWeight += weight;
-      sumDelta += weight;
-      minX = Math.min(minX, x);
-      minY = Math.min(minY, y);
-      maxX = Math.max(maxX, x);
-      maxY = Math.max(maxY, y);
-
-      const neighbors = [p - 1, p + 1, p - width, p + width];
-      for (const next of neighbors) {
-        if (
-          next >= 0 &&
-          next < count &&
-          cleaned[next] &&
-          !visited[next]
-        ) {
-          visited[next] = 1;
-          queue[tail++] = next;
-        }
-      }
-    }
-
-    if (area < 7 || area > 2600) continue;
-
-    const boxW = maxX - minX + 1;
-    const boxH = maxY - minY + 1;
-    const aspect = Math.min(boxW, boxH) / Math.max(boxW, boxH);
-    const density = area / (boxW * boxH);
-    const averageDelta = sumDelta / area;
-    const score = area * averageDelta * (0.5 + aspect) * (0.5 + density);
-
-    const component = {
-      x: sumX / sumWeight,
-      y: sumY / sumWeight,
-      area,
-      averageDelta,
-      aspect,
-      score
-    };
-
-    if (!best || component.score > best.score) best = component;
-  }
-
-  if (!best) return null;
-
-  const plausibleArea = best.area >= 12 && best.area <= 1200;
-  const plausibleContrast = best.averageDelta >= 20;
-  const plausibleShape = best.aspect >= 0.28;
-
-  const confidence = Math.max(
-    0,
-    Math.min(
-      1,
-      (best.averageDelta - 14) / 45 * 0.5 +
-      Math.min(best.area / 220, 1) * 0.3 +
-      best.aspect * 0.2
-    )
+  cv.warpAffine(
+    source,
+    result,
+    transform,
+    new cv.Size(source.cols, source.rows),
+    cv.INTER_LINEAR,
+    cv.BORDER_REPLICATE,
+    new cv.Scalar()
   );
 
-  if (!plausibleArea || !plausibleContrast || !plausibleShape || confidence < 0.42) {
-    return null;
+  transform.delete();
+  return result;
+}
+
+function alignGrayMats(
+  referenceGray,
+  currentGray,
+  maxShift = MAX_ALIGNMENT_SHIFT
+) {
+  let bestDx = 0;
+  let bestDy = 0;
+  let bestError = Number.POSITIVE_INFINITY;
+
+  for (let dy = -maxShift; dy <= maxShift; dy++) {
+    for (let dx = -maxShift; dx <= maxShift; dx++) {
+      const error = sampledShiftError(
+        referenceGray,
+        currentGray,
+        dx,
+        dy
+      );
+
+      if (error < bestError) {
+        bestError = error;
+        bestDx = dx;
+        bestDy = dy;
+      }
+    }
   }
 
   return {
-    x: best.x / (CANONICAL_SIZE - 1),
-    y: best.y / (CANONICAL_SIZE - 1),
-    confidence
+    aligned: shiftGrayMat(currentGray, bestDx, bestDy),
+    dx: bestDx,
+    dy: bestDy,
+    error: bestError
   };
 }
 
-function findOverlapSuggestion(before, after) {
-  if (!localShots.length) return null;
+function contourCircularity(contour) {
+  const area = cv.contourArea(contour, false);
+  const perimeter = cv.arcLength(contour, true);
 
-  let best = null;
-  for (const shot of localShots) {
-    const paperPoint = toPaperCoordinates(shot.x, shot.y);
-    const cx = paperPoint.x * (CANONICAL_SIZE - 1);
-    const cy = paperPoint.y * (CANONICAL_SIZE - 1);
-    let sum = 0;
-    let count = 0;
+  if (perimeter <= 0) return 0;
+  return (4 * Math.PI * area) / (perimeter * perimeter);
+}
 
-    for (let y = Math.max(0, Math.floor(cy - 22)); y <= Math.min(CANONICAL_SIZE - 1, Math.ceil(cy + 22)); y++) {
-      for (let x = Math.max(0, Math.floor(cx - 22)); x <= Math.min(CANONICAL_SIZE - 1, Math.ceil(cx + 22)); x++) {
-        const dx = x - cx;
-        const dy = y - cy;
-        if (dx * dx + dy * dy > 22 * 22) continue;
-        const p = y * CANONICAL_SIZE + x;
-        sum += Math.abs(grayAt(before.data, p) - grayAt(after.data, p));
-        count++;
+function createContourMask(rows, cols, contour) {
+  const mask = cv.Mat.zeros(rows, cols, cv.CV_8UC1);
+  const contours = new cv.MatVector();
+
+  contours.push_back(contour);
+  cv.drawContours(
+    mask,
+    contours,
+    0,
+    new cv.Scalar(255),
+    cv.FILLED
+  );
+
+  contours.delete();
+  return mask;
+}
+
+function observedBlackRadiusPixels() {
+  if (!targetCenter) return null;
+
+  const distances = RING_DIRECTIONS
+    .map((direction) => ringCalibrationPoints[direction])
+    .filter(Boolean)
+    .map((point) => {
+      const dx = (point.x - targetCenter.x) * CANONICAL_SIZE;
+      const dy = (point.y - targetCenter.y) * CANONICAL_SIZE;
+      return Math.hypot(dx, dy);
+    })
+    .filter((distance) => Number.isFinite(distance) && distance > 5);
+
+  if (!distances.length) return null;
+
+  return (
+    distances.reduce((total, distance) => total + distance, 0) /
+    distances.length
+  );
+}
+
+function createTargetRoiMask(rows, cols) {
+  const mask = cv.Mat.zeros(rows, cols, cv.CV_8UC1);
+
+  const centerX = targetCenter
+    ? Math.round(targetCenter.x * (cols - 1))
+    : Math.round(cols / 2);
+
+  const centerY = targetCenter
+    ? Math.round(targetCenter.y * (rows - 1))
+    : Math.round(rows / 2);
+
+  const blackRadius = observedBlackRadiusPixels();
+
+  // Kalibrasyon varsa iç daire ölçeğinden dış arama alanını çıkar.
+  // Kalibrasyon yoksa kâğıt kenarlarını dışarıda bırakacak güvenli bir daire kullan.
+  const estimatedRadius = blackRadius
+    ? blackRadius * BLACK_TO_OUTER_ROI_RATIO
+    : Math.min(rows, cols) * 0.455;
+
+  const radius = Math.round(
+    Math.max(
+      40,
+      Math.min(
+        estimatedRadius,
+        Math.min(rows, cols) * 0.49 - ROI_EDGE_PADDING_PX
+      )
+    )
+  );
+
+  cv.circle(
+    mask,
+    new cv.Point(centerX, centerY),
+    radius,
+    new cv.Scalar(255),
+    cv.FILLED
+  );
+
+  return {
+    mask,
+    centerX,
+    centerY,
+    radius
+  };
+}
+
+function buildAdaptiveDifferenceMask(referenceGray, diff, roiMask) {
+  const localMean = new cv.Mat();
+  const otsuPreview = new cv.Mat();
+  const adaptive = cv.Mat.zeros(diff.rows, diff.cols, cv.CV_8UC1);
+
+  cv.blur(
+    diff,
+    localMean,
+    new cv.Size(LOCAL_MEAN_BLOCK_SIZE, LOCAL_MEAN_BLOCK_SIZE)
+  );
+
+  const otsuThreshold = cv.threshold(
+    diff,
+    otsuPreview,
+    0,
+    255,
+    cv.THRESH_BINARY + cv.THRESH_OTSU
+  );
+
+  const referenceData = referenceGray.data;
+  const diffData = diff.data;
+  const meanData = localMean.data;
+  const roiData = roiMask.data;
+  const outputData = adaptive.data;
+
+  for (let index = 0; index < diffData.length; index++) {
+    if (!roiData[index]) {
+      outputData[index] = 0;
+      continue;
+    }
+
+    const darkRegion = referenceData[index] < DARK_REFERENCE_CUTOFF;
+
+    // Koyu bölgede düşük kontrastlı güvenli işaret değişimini kaybetmemek için
+    // taban eşiği düşürülür. Açık bölgede gölge/parazit için daha sert eşik uygulanır.
+    const globalFloor = darkRegion
+      ? Math.max(4, otsuThreshold * 0.46)
+      : Math.max(9, otsuThreshold * 0.88);
+
+    const localFloor =
+      meanData[index] +
+      (darkRegion ? DARK_LOCAL_OFFSET : LIGHT_LOCAL_OFFSET);
+
+    const threshold = Math.max(globalFloor, localFloor);
+    outputData[index] = diffData[index] >= threshold ? 255 : 0;
+  }
+
+  localMean.delete();
+  otsuPreview.delete();
+
+  return {
+    mask: adaptive,
+    otsuThreshold
+  };
+}
+
+function extractMergedPeaks(componentMask, rect, maxPeaks = 3) {
+  const roi = componentMask.roi(rect);
+  const distance = new cv.Mat();
+  const peakMask = new cv.Mat();
+  const peakContours = new cv.MatVector();
+  const hierarchy = new cv.Mat();
+
+  try {
+    cv.distanceTransform(roi, distance, cv.DIST_L2, 3);
+
+    const extrema = cv.minMaxLoc(distance);
+    if (!extrema || extrema.maxVal < 1.5) return [];
+
+    cv.threshold(
+      distance,
+      peakMask,
+      extrema.maxVal * 0.42,
+      255,
+      cv.THRESH_BINARY
+    );
+
+    peakMask.convertTo(peakMask, cv.CV_8UC1);
+
+    cv.findContours(
+      peakMask,
+      peakContours,
+      hierarchy,
+      cv.RETR_EXTERNAL,
+      cv.CHAIN_APPROX_SIMPLE
+    );
+
+    const peaks = [];
+
+    for (let index = 0; index < peakContours.size(); index++) {
+      const contour = peakContours.get(index);
+
+      try {
+        const area = cv.contourArea(contour, false);
+        if (area < 2) continue;
+
+        const moments = cv.moments(contour, false);
+        if (!moments.m00) continue;
+
+        peaks.push({
+          x: rect.x + moments.m10 / moments.m00,
+          y: rect.y + moments.m01 / moments.m00,
+          strength: area
+        });
+      } finally {
+        contour.delete();
       }
     }
 
-    const change = count ? sum / count : 0;
-    if (!best || change > best.change) {
-      best = { x: paperPoint.x, y: paperPoint.y, change };
-    }
+    peaks.sort((first, second) => second.strength - first.strength);
+    return peaks.slice(0, maxPeaks);
+  } finally {
+    roi.delete();
+    distance.delete();
+    peakMask.delete();
+    peakContours.delete();
+    hierarchy.delete();
   }
-
-  return best && best.change > 3.2
-    ? { ...best, confidence: Math.min(0.45, best.change / 18) }
-    : null;
 }
 
-async function triggerShotPipeline() {
-  if (triggerLocked || !referenceFrame || corners.length !== 4) return;
-  
-  triggerLocked = true;
-  console.log("🔫 Trigger başladı");
+function findNewMarker(referenceGray, currentGray) {
+  const alignment = alignGrayMats(referenceGray, currentGray);
+  const aligned = alignment.aligned;
 
-  send({
-    type: "sensor_event",
-    message: "Tanımlı ses algılandı. Görüntüler karşılaştırılıyor...",
-    level: "info"
-  });
-  
-  setStatus("Atış olayı algılandı. İşleniyor...", "warn");
+  const diff = new cv.Mat();
+  const blurred = new cv.Mat();
+  const opened = new cv.Mat();
+  const cleaned = new cv.Mat();
+  const contours = new cv.MatVector();
+  const hierarchy = new cv.Mat();
+
+  const openKernel = cv.getStructuringElement(
+    cv.MORPH_ELLIPSE,
+    new cv.Size(3, 3)
+  );
+
+  const closeKernel = cv.getStructuringElement(
+    cv.MORPH_ELLIPSE,
+    new cv.Size(5, 5)
+  );
+
+  const roiInfo = createTargetRoiMask(
+    referenceGray.rows,
+    referenceGray.cols
+  );
+
+  const candidates = [];
+  let adaptiveResult = null;
 
   try {
-    const beforeRaw = lastRawFrames[Math.max(0, lastRawFrames.length - 3)] || captureRawFrame();
+    // Çift yönlü değişim: hem açılmayı hem koyulaşmayı yakalar.
+    cv.absdiff(referenceGray, aligned, diff);
 
-    await new Promise((resolve) => setTimeout(resolve, 600));
+    cv.GaussianBlur(
+      diff,
+      blurred,
+      new cv.Size(3, 3),
+      0,
+      0,
+      cv.BORDER_DEFAULT
+    );
 
-    const afterRaw = captureRawFrame();
-    const beforeWarped = warpFrame(beforeRaw);
-    const afterWarped = warpFrame(afterRaw);
+    adaptiveResult = buildAdaptiveDifferenceMask(
+      referenceGray,
+      blurred,
+      roiInfo.mask
+    );
 
-    warpedCtx.putImageData(afterWarped, 0, 0);
+    cv.morphologyEx(
+      adaptiveResult.mask,
+      opened,
+      cv.MORPH_OPEN,
+      openKernel
+    );
+
+    // Yakın/bitişik güvenli işaret parçalarını tekrar birleştir.
+    cv.morphologyEx(
+      opened,
+      cleaned,
+      cv.MORPH_CLOSE,
+      closeKernel
+    );
+
+    cv.bitwise_and(
+      cleaned,
+      roiInfo.mask,
+      cleaned
+    );
+
+    cv.findContours(
+      cleaned,
+      contours,
+      hierarchy,
+      cv.RETR_EXTERNAL,
+      cv.CHAIN_APPROX_SIMPLE
+    );
+
+    const minArea = 9;
+    const borderMargin = 5;
+
+    for (let index = 0; index < contours.size(); index++) {
+      const contour = contours.get(index);
+
+      try {
+        const area = cv.contourArea(contour, false);
+        if (area < minArea || area > MAX_COMPONENT_AREA) continue;
+
+        const rect = cv.boundingRect(contour);
+
+        if (
+          rect.x <= borderMargin ||
+          rect.y <= borderMargin ||
+          rect.x + rect.width >= CANONICAL_SIZE - borderMargin ||
+          rect.y + rect.height >= CANONICAL_SIZE - borderMargin
+        ) {
+          continue;
+        }
+
+        const rawAspect = rect.width / Math.max(1, rect.height);
+        const aspectCloseness =
+          Math.min(rawAspect, 1 / Math.max(rawAspect, 0.0001));
+
+        const circularity = contourCircularity(contour);
+        const fillRatio =
+          area / Math.max(1, rect.width * rect.height);
+
+        const merged =
+          area >= MERGED_AREA_THRESHOLD ||
+          rect.width >= 27 ||
+          rect.height >= 27;
+
+        // Normal küçük işaretlerde çizgi/parazit filtresi sıkıdır.
+        // Büyük/bitişik bileşenlerde filtre gevşetilir, fakat otomatik gönderim yapılmaz.
+        const minAspect = merged ? 0.20 : 0.36;
+        const maxAspect = merged ? 5.00 : 2.80;
+        const minCircularity = merged ? 0.025 : 0.11;
+        const minFill = merged ? 0.055 : 0.11;
+
+        if (rawAspect < minAspect || rawAspect > maxAspect) continue;
+        if (circularity < minCircularity) continue;
+        if (fillRatio < minFill) continue;
+
+        const moments = cv.moments(contour, false);
+        if (!moments.m00) continue;
+
+        const centerX = moments.m10 / moments.m00;
+        const centerY = moments.m01 / moments.m00;
+
+        const componentMask = createContourMask(
+          cleaned.rows,
+          cleaned.cols,
+          contour
+        );
+
+        const meanDifference = cv.mean(diff, componentMask)[0];
+        const meanReference = cv.mean(referenceGray, componentMask)[0];
+        const darkRegion = meanReference < DARK_REFERENCE_CUTOFF;
+
+        const areaScore = clamp01((area - minArea) / 230);
+        const expectedFloor = darkRegion
+          ? Math.max(4, adaptiveResult.otsuThreshold * 0.30)
+          : Math.max(8, adaptiveResult.otsuThreshold * 0.55);
+
+        const intensityScore = clamp01(
+          (meanDifference - expectedFloor) / (darkRegion ? 34 : 48)
+        );
+
+        const circularityScore = clamp01(
+          (circularity - minCircularity) /
+          Math.max(0.15, 0.70 - minCircularity)
+        );
+
+        const aspectScore = clamp01(
+          (aspectCloseness - minAspect) /
+          Math.max(0.10, 1 - minAspect)
+        );
+
+        const fillScore = clamp01(
+          (fillRatio - minFill) /
+          Math.max(0.10, 0.62 - minFill)
+        );
+
+        const regionSensitivityBonus = darkRegion ? 0.06 : 0;
+        const mergedPenalty = merged ? 0.12 : 0;
+
+        const baseConfidence = clamp01(
+          areaScore * 0.15 +
+          intensityScore * 0.34 +
+          circularityScore * 0.19 +
+          aspectScore * 0.16 +
+          fillScore * 0.16 +
+          regionSensitivityBonus -
+          mergedPenalty
+        );
+
+        const baseCandidate = {
+          x: centerX / (CANONICAL_SIZE - 1),
+          y: centerY / (CANONICAL_SIZE - 1),
+          pixelX: centerX,
+          pixelY: centerY,
+          area,
+          meanDifference,
+          meanReference,
+          darkRegion,
+          circularity,
+          aspectRatio: rawAspect,
+          fillRatio,
+          merged,
+          confidence: baseConfidence
+        };
+
+        if (merged) {
+          const peaks = extractMergedPeaks(componentMask, rect);
+
+          if (peaks.length >= 2) {
+            for (const peak of peaks) {
+              candidates.push({
+                ...baseCandidate,
+                x: peak.x / (CANONICAL_SIZE - 1),
+                y: peak.y / (CANONICAL_SIZE - 1),
+                pixelX: peak.x,
+                pixelY: peak.y,
+                splitFromMerged: true,
+                confidence: clamp01(baseConfidence * 0.88)
+              });
+            }
+          } else {
+            candidates.push(baseCandidate);
+          }
+        } else {
+          candidates.push(baseCandidate);
+        }
+
+        componentMask.delete();
+      } finally {
+        contour.delete();
+      }
+    }
+
+    candidates.sort(
+      (first, second) => second.confidence - first.confidence
+    );
+
+    if (!candidates.length) {
+      return {
+        detected: false,
+        confidence: 0,
+        candidates: [],
+        alignment,
+        roi: {
+          centerX: roiInfo.centerX,
+          centerY: roiInfo.centerY,
+          radius: roiInfo.radius
+        }
+      };
+    }
+
+    const best = candidates[0];
+    const second = candidates[1];
+
+    const uniqueness = second
+      ? clamp01((best.confidence - second.confidence) / 0.24)
+      : 1;
+
+    const alignmentQuality = clamp01(1 - alignment.error / 22);
+
+    best.confidence = clamp01(
+      best.confidence * 0.76 +
+      uniqueness * 0.14 +
+      alignmentQuality * 0.10
+    );
+
+    // Bitişik/bölünmüş adaylar kullanıcı kontrolü olmadan gönderilmez.
+    const requiresManualReview =
+      Boolean(best.merged) ||
+      Boolean(best.splitFromMerged) ||
+      best.confidence < MIN_CONFIDENCE_TO_SEND;
+
+    return {
+      detected: !requiresManualReview,
+      confidence: best.confidence,
+      best,
+      candidates: candidates.slice(0, 5),
+      alignment,
+      requiresManualReview,
+      roi: {
+        centerX: roiInfo.centerX,
+        centerY: roiInfo.centerY,
+        radius: roiInfo.radius
+      }
+    };
+  } finally {
+    aligned.delete();
+    diff.delete();
+    blurred.delete();
+    opened.delete();
+    cleaned.delete();
+    contours.delete();
+    hierarchy.delete();
+    openKernel.delete();
+    closeKernel.delete();
+    roiInfo.mask.delete();
+
+    if (adaptiveResult) {
+      adaptiveResult.mask.delete();
+    }
+  }
+}
+
+function drawMarkerCandidates(detection) {
+  if (!detection || !detection.candidates) return;
+
+  warpedCtx.save();
+  warpedCtx.font = "bold 13px system-ui";
+  warpedCtx.textAlign = "left";
+  warpedCtx.textBaseline = "middle";
+
+  detection.candidates.forEach((candidate, index) => {
+    const x = candidate.x * warpedPreview.width;
+    const y = candidate.y * warpedPreview.height;
+    const isBest = index === 0;
+
+    warpedCtx.strokeStyle = isBest ? "#fbbf24" : "#60a5fa";
+    warpedCtx.fillStyle = isBest ? "#fbbf24" : "#60a5fa";
+    warpedCtx.lineWidth = isBest ? 3 : 2;
+
+    warpedCtx.beginPath();
+    warpedCtx.arc(x, y, isBest ? 12 : 9, 0, Math.PI * 2);
+    warpedCtx.stroke();
+
+    const regionTag = candidate.darkRegion ? "K" : "A";
+    const mergedTag =
+      candidate.splitFromMerged ? "·Bölünmüş" :
+      candidate.merged ? "·Bitişik" :
+      "";
+
+    warpedCtx.fillText(
+      `${index + 1}: %${Math.round(candidate.confidence * 100)} · ${regionTag}${mergedTag}`,
+      x + 15,
+      y
+    );
+  });
+
+  warpedCtx.restore();
+}
+
+async function triggerProcessPipeline() {
+  if (
+    triggerLocked ||
+    !referenceMedianGray ||
+    corners.length !== 4
+  ) {
+    return;
+  }
+
+  triggerLocked = true;
+  clearPendingDetection();
+
+  try {
+    await ensureOpenCvReady();
+
+    send({
+      type: "sensor_event",
+      message: "Tanımlı ses algılandı. Güvenli işaret değişikliği aranıyor...",
+      level: "info"
+    });
+
+    setStatus(
+      `${MEDIAN_FRAME_COUNT} yeni kare toplanıyor ve hizalanıyor...`,
+      "warn"
+    );
+
+    // Görüntünün oturması için kısa bekleme.
+    await delay(260);
+
+    const rawFrames = await collectRawFrames();
+    const currentMedian = buildMedianWarpedGray(rawFrames);
+    const detection = findNewMarker(
+      referenceMedianGray,
+      currentMedian.gray
+    );
+
+    warpedCtx.putImageData(currentMedian.preview, 0, 0);
     drawCalibrationOverlay();
+    drawMarkerCandidates(detection);
 
-    const candidate = findNewHole(beforeWarped, afterWarped);
-
-    if (candidate) {
-      const targetPoint = toTargetCoordinates(candidate.x, candidate.y);
-      
-      console.log(`✅ Delik bulundu → (${targetPoint.x.toFixed(3)}, ${targetPoint.y.toFixed(3)})`);
+    if (detection.detected && detection.best) {
+      const targetPoint = toTargetCoordinates(
+        detection.best.x,
+        detection.best.y
+      );
 
       send({
         type: "shot",
         x: targetPoint.x,
         y: targetPoint.y,
-        confidence: candidate.confidence,
+        confidence: detection.best.confidence,
         status: "confirmed",
-        source: "camera"
+        source: "marker"
       });
 
-      referenceFrame = afterWarped;
-      setStatus(`Yeni delik bulundu. Güven: %${Math.round(candidate.confidence * 100)}`, "ok");
+      // Başarılı işaret yeni referansın parçası olur.
+      replaceReferenceMedian(currentMedian.gray.clone());
+      referenceFrame = currentMedian.preview;
+      currentMedian.gray.delete();
+
+      setStatus(
+        `Yeni işaret otomatik bulundu. Güven: %${Math.round(
+          detection.best.confidence * 100
+        )} · hizalama: ${detection.alignment.dx},${detection.alignment.dy}px`,
+        "ok"
+      );
     } else {
-      console.log("❌ Delik bulunamadı, manuel moda");
-      candidateSuggestion = { x: 0.5, y: 0.5, confidence: 0.35 };
+      pendingMedianGray = currentMedian.gray;
+      pendingPreviewFrame = currentMedian.preview;
+
+      candidateSuggestion = detection.best
+        ? {
+            x: detection.best.x,
+            y: detection.best.y,
+            confidence: detection.best.confidence
+          }
+        : null;
+
+      confirmSuggestedBtn.disabled = !candidateSuggestion;
       manualPanel.classList.remove("hidden");
-      setStatus("Yeni delik bulunamadı. Hedefe dokunarak konum seç.", "warn");
+
+      const confidenceText = detection.best
+        ? `%${Math.round(detection.best.confidence * 100)}`
+        : "aday yok";
+
+      const reviewReason = detection.best?.merged || detection.best?.splitFromMerged
+        ? "Bitişik/büyük değişiklik bulundu; manuel kontrol gerekli."
+        : `Otomatik güven yetersiz (${confidenceText}).`;
+
+      setStatus(
+        `${reviewReason} En iyi adayı kontrol et veya görüntüye dokun.`,
+        "warn"
+      );
+
+      send({
+        type: "sensor_event",
+        message: "İşaret değişikliği için manuel onay gerekli.",
+        level: "warn"
+      });
     }
   } catch (error) {
-    console.error("Trigger Hatası:", error.message || error);
-    setStatus("İşlem sırasında hata oluştu. Tekrar dene veya manuel seç.", "danger");
+    console.error(error);
+    setStatus(
+      `Algılama hatası: ${error.message || error}`,
+      "danger"
+    );
   } finally {
-    setTimeout(() => { triggerLocked = false; }, 1400);
+    triggerLocked = false;
   }
 }
 
@@ -1084,9 +1778,9 @@ function sendManualShot(x, y, confidence = 0.35) {
     status: "suspect",
     source: "manual"
   });
+  commitPendingReference();
   manualPanel.classList.add("hidden");
-  candidateSuggestion = null;
-  setStatus("Şüpheli atış kaydedildi.", "warn");
+  setStatus("Elle onaylanan işaret kaydedildi.", "ok");
 }
 
 warpedPreview.addEventListener("pointerdown", (event) => {
@@ -1137,8 +1831,8 @@ confirmSuggestedBtn.addEventListener("click", () => {
 
 cancelManualBtn.addEventListener("click", () => {
   manualPanel.classList.add("hidden");
-  candidateSuggestion = null;
-  setStatus("Şüpheli algılama iptal edildi.", "");
+  clearPendingDetection();
+  setStatus("Düşük güvenli algılama iptal edildi.", "");
 });
 
 centerBtn.addEventListener("click", () => {
@@ -1171,6 +1865,8 @@ zoomRange.addEventListener("input", () => {
   if (corners.length > 0 || referenceFrame) {
     corners = [];
     referenceFrame = null;
+    replaceReferenceMedian(null);
+    clearPendingDetection();
     targetCenter = null;
     centerSelectionMode = false;
     ringCalibrationMode = false;
@@ -1202,6 +1898,6 @@ resetCornersBtn.addEventListener("click", resetCorners);
 referenceBtn.addEventListener("click", saveReference);
 learnSoundBtn.addEventListener("click", learnSound);
 armBtn.addEventListener("click", toggleArm);
-testBtn.addEventListener("click", triggerShotPipeline);
+testBtn.addEventListener("click", triggerProcessPipeline);
 
 connectSocket();

@@ -159,3 +159,29 @@ getirirse sekmeyi kapatıp yeniden açın.
 
 Hiçbir kamera sistemi için %100 doğruluk garantisi verilemez. Bu sürüm,
 düşük güvenli sonuçları otomatik göndermeyerek yanlış pozitifleri azaltır.
+
+
+## Güvenli Marker V2: adaptif duyarlılık ve ROI
+
+Bu sürüm güvenli kalem noktası, etiket ve benzeri kâğıt değişiklikleri için
+aşağıdaki ek iyileştirmeleri içerir:
+
+- Referans görüntüsünün koyu ve açık bölgeleri ayrı duyarlılıkla değerlendirilir.
+- Koyu bölgede düşük kontrastlı değişiklikler için daha düşük dinamik eşik kullanılır.
+- Açık bölgede gölge ve kamera sıkıştırma parazitleri için daha sert eşik uygulanır.
+- Yerel ortalama temelli adaptif eşik, global Otsu eşiğiyle birleştirilir.
+- Arama yalnızca kalibre edilen eş merkezli daire alanının içinde yapılır.
+- Kâğıt kenarları ve hedef dışı alan ROI maskesiyle devre dışı bırakılır.
+- Büyük/bitişik işaret bileşenleri esnek şekil filtresinden geçirilir.
+- Distance Transform ile birden fazla tepe bulunursa ayrı adaylar gösterilir.
+- Bitişik veya bölünmüş adaylar otomatik gönderilmez; manuel kontrol ister.
+
+Aday etiketlerindeki:
+- `K`: koyu referans bölgesi
+- `A`: açık referans bölgesi
+- `Bitişik` / `Bölünmüş`: büyük bileşen veya ayrıştırılmış aday
+
+anlamına gelir.
+
+Hiçbir gerçek kamera sisteminde yüzde yüz doğruluk garanti edilemez. Bu paket
+düşük güvenli ve bitişik sonuçları otomatik göndermeyerek yanlış pozitifleri azaltır.
