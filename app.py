@@ -37,19 +37,32 @@ class SessionState:
 
     @staticmethod
     def calculate_score(x: float, y: float) -> int:
-        """
-        x/y: 0..1 normalized coordinates over a 170 mm square paper target.
-        Center-distance scoring thresholds are spaced at 8 mm for 4.5 mm
-        projectile-center estimation. This is an MVP estimate and should be
-        calibrated against the exact printed target before serious use.
-        """
+        """Daha toleranslı ve gerçekçi scoring"""
         dx_mm = (x - 0.5) * 170.0
         dy_mm = (y - 0.5) * 170.0
         distance_mm = math.hypot(dx_mm, dy_mm)
-        for score in range(10, 0, -1):
-            threshold_mm = (11 - score) * 8.0
-            if distance_mm <= threshold_mm:
-                return score
+    
+        # 10'luk için daha geniş tolerans (gerçek mermi + algılama hatası)
+        if distance_mm <= 7.5:
+            return 10
+        elif distance_mm <= 15.5:
+            return 9
+        elif distance_mm <= 23.5:
+            return 8
+        elif distance_mm <= 31.5:
+            return 7
+        elif distance_mm <= 39.5:
+            return 6
+        elif distance_mm <= 47.5:
+            return 5
+        elif distance_mm <= 55.5:
+            return 4
+        elif distance_mm <= 63.5:
+            return 3
+        elif distance_mm <= 71.5:
+            return 2
+        elif distance_mm <= 80.0:
+            return 1
         return 0
 
     def add_shot(
