@@ -31,11 +31,9 @@
           <button id="resetCornersBtn" disabled>2. Köşeleri sıfırla</button>
           <button id="referenceBtn" disabled class="ok">3. Temiz hedefi kaydet</button>
           <button id="centerBtn" disabled class="warn">4. Hedef merkezini seç</button>
-          <button id="ring9Btn" disabled>5. 9 halkasını seç</button>
-          <button id="ring8Btn" disabled>6. 8 halkasını seç</button>
-          <button id="ring7Btn" disabled>7. 7 halkasını seç</button>
-          <button id="learnSoundBtn" disabled class="warn">8. Sesi öğret</button>
-          <button id="armBtn" disabled>9. Sistemi hazırla</button>
+          <button id="ringCalBtn" disabled>5. Siyah daireyi 4 yönden seç</button>
+          <button id="learnSoundBtn" disabled class="warn">6. Sesi öğret</button>
+          <button id="armBtn" disabled>7. Sistemi hazırla</button>
           <button id="testBtn" disabled>Test tetikle</button>
         </div>
 
@@ -68,17 +66,19 @@
         <h2 style="margin-top:18px">Düzeltilmiş hedef</h2>
         <canvas id="warpedPreview" class="preview-canvas" width="500" height="500"></canvas>
         <p class="muted small">
-          Önce 10 halkasının tam merkezini seç. Ardından 9, 8 ve 7 halka çizgilerinin herhangi bir noktasına
-          sırayla dokun. Sistem diğer halkaları otomatik hesaplar.
-          Şüpheli algılamada yine bu hedefe dokunarak konumu elle seçebilirsin.
+          Önce 10 halkasının tam merkezini seç. Sonra dış siyah dairenin kenarını
+          <strong>üst → sağ → alt → sol</strong> sırasıyla işaretle. Bu beş nokta;
+          kayma, dönme, yatay/dikey ölçek farkı ve yamulmayı birlikte düzeltir.
         </p>
 
         <div class="calibration-box">
-          <div><span>9 halkası</span><strong id="ring9Value">Seçilmedi</strong></div>
-          <div><span>8 halkası</span><strong id="ring8Value">Seçilmedi</strong></div>
-          <div><span>7 halkası</span><strong id="ring7Value">Seçilmedi</strong></div>
+          <div><span>Merkez</span><strong id="centerValue">Seçilmedi</strong></div>
+          <div><span>Üst</span><strong id="topValue">Seçilmedi</strong></div>
+          <div><span>Sağ</span><strong id="rightValue">Seçilmedi</strong></div>
+          <div><span>Alt</span><strong id="bottomValue">Seçilmedi</strong></div>
+          <div><span>Sol</span><strong id="leftValue">Seçilmedi</strong></div>
           <p id="calibrationQuality" class="muted small">
-            Halka ölçeği henüz hazır değil.
+            Beş noktalı kalibrasyon henüz hazır değil.
           </p>
         </div>
 
@@ -95,6 +95,6 @@
     </section>
   </main>
 
-  <script src="/static/js/tablet.js?v=ring-buttons-fix-2"></script>
+  <script src="/static/js/tablet.js?v=affine-calibration-1"></script>
 </body>
 </html>

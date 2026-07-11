@@ -109,3 +109,16 @@ Yeni kullanım sırası:
 
 Kalibrasyon kutusunda üç seçimin piksel yarıçapları ve tahmini hata kalitesi gösterilir.
 Merkezden uzaklık sırası `9 < 8 < 7` değilse sistem kalibrasyonu kabul etmez.
+
+
+## Beş noktalı konum kalibrasyonu
+
+Bu sürüm tek bir halka yarıçapına göre büyütme yapmak yerine 5 referans noktası kullanır:
+
+1. Hedef merkezi
+2. Dış siyah dairenin üst kenarı
+3. Dış siyah dairenin sağ kenarı
+4. Dış siyah dairenin alt kenarı
+5. Dış siyah dairenin sol kenarı
+
+Bu noktalardan 2B affine dönüşüm hesaplanır. Böylece merkez kayması, dönme, yatay/dikey ölçek farkı ve hafif yamulma birlikte düzeltilir. Kalibrasyondan sonra düzeltilmiş hedefte çizilen mavi halkaların basılı halkalarla çakışması gerekir.

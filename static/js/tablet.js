@@ -15,9 +15,7 @@ const startBtn = document.getElementById("startBtn");
 const resetCornersBtn = document.getElementById("resetCornersBtn");
 const referenceBtn = document.getElementById("referenceBtn");
 const centerBtn = document.getElementById("centerBtn");
-const ring9Btn = document.getElementById("ring9Btn");
-const ring8Btn = document.getElementById("ring8Btn");
-const ring7Btn = document.getElementById("ring7Btn");
+const ringCalBtn = document.getElementById("ringCalBtn");
 const learnSoundBtn = document.getElementById("learnSoundBtn");
 const armBtn = document.getElementById("armBtn");
 const testBtn = document.getElementById("testBtn");
@@ -32,9 +30,11 @@ const connectionState = document.getElementById("connectionState");
 const manualPanel = document.getElementById("manualPanel");
 const confirmSuggestedBtn = document.getElementById("confirmSuggestedBtn");
 const cancelManualBtn = document.getElementById("cancelManualBtn");
-const ring9Value = document.getElementById("ring9Value");
-const ring8Value = document.getElementById("ring8Value");
-const ring7Value = document.getElementById("ring7Value");
+const centerValue = document.getElementById("centerValue");
+const topValue = document.getElementById("topValue");
+const rightValue = document.getElementById("rightValue");
+const bottomValue = document.getElementById("bottomValue");
+const leftValue = document.getElementById("leftValue");
 const calibrationQuality = document.getElementById("calibrationQuality");
 
 const captureCanvas = document.createElement("canvas");
@@ -60,9 +60,10 @@ let lastRawCaptureAt = 0;
 let softwareZoom = 1;
 let targetCenter = null;
 let centerSelectionMode = false;
-let ringSelectionMode = null;
-let ringReferences = { 9: null, 8: null, 7: null };
-let calibrationScale = 1;
+let ringCalibrationMode = false;
+let ringCalibrationIndex = 0;
+let ringCalibrationPoints = { top: null, right: null, bottom: null, left: null };
+let affineTransform = null;
 let calibrationReady = false;
 
 function setStatus(text, level = "") {
@@ -82,199 +83,253 @@ function expectedRingRadiusNormalized(score) {
   return visibleRingRadiusMm(score) / 170;
 }
 
-function setRingButtonsEnabled(enabled) {
-  const buttons = [ring9Btn, ring8Btn, ring7Btn];
+const RING_DIRECTIONS = ["top", "right", "bottom", "left"];
+const RING_DIRECTION_LABELS = {
+  top: "Üst",
+  right: "Sağ",
+  bottom: "Alt",
+  left: "Sol"
+};
 
-  for (const button of buttons) {
-    if (!button) continue;
-
-    button.disabled = !enabled;
-
-    if (enabled) {
-      button.removeAttribute("disabled");
-      button.setAttribute("aria-disabled", "false");
-    } else {
-      button.setAttribute("disabled", "");
-      button.setAttribute("aria-disabled", "true");
-    }
+function setRingCalibrationEnabled(enabled) {
+  ringCalBtn.disabled = !enabled;
+  if (enabled) {
+    ringCalBtn.removeAttribute("disabled");
+    ringCalBtn.setAttribute("aria-disabled", "false");
+  } else {
+    ringCalBtn.setAttribute("disabled", "");
+    ringCalBtn.setAttribute("aria-disabled", "true");
   }
 }
 
-function resetRingCalibration() {
-  ringSelectionMode = null;
-  ringReferences = { 9: null, 8: null, 7: null };
-  calibrationScale = 1;
+function resetAffineCalibration() {
+  ringCalibrationMode = false;
+  ringCalibrationIndex = 0;
+  ringCalibrationPoints = { top: null, right: null, bottom: null, left: null };
+  affineTransform = null;
   calibrationReady = false;
 
-  ring9Btn.textContent = "5. 9 halkasını seç";
-  ring8Btn.textContent = "6. 8 halkasını seç";
-  ring7Btn.textContent = "7. 7 halkasını seç";
-
-  ring9Value.textContent = "Seçilmedi";
-  ring8Value.textContent = "Seçilmedi";
-  ring7Value.textContent = "Seçilmedi";
-  calibrationQuality.textContent = "Halka ölçeği henüz hazır değil.";
+  ringCalBtn.textContent = "5. Siyah daireyi 4 yönden seç";
+  centerValue.textContent = targetCenter ? "Hazır" : "Seçilmedi";
+  topValue.textContent = "Seçilmedi";
+  rightValue.textContent = "Seçilmedi";
+  bottomValue.textContent = "Seçilmedi";
+  leftValue.textContent = "Seçilmedi";
+  calibrationQuality.textContent = "Beş noktalı kalibrasyon henüz hazır değil.";
 }
 
-function updateRingValue(score, point) {
-  const element = score === 9 ? ring9Value : score === 8 ? ring8Value : ring7Value;
-  if (!point) {
-    element.textContent = "Seçilmedi";
-    return;
+function fitAffineTransform(observedPoints, targetPoints) {
+  const normal = [
+    [0, 0, 0],
+    [0, 0, 0],
+    [0, 0, 0]
+  ];
+  const bx = [0, 0, 0];
+  const by = [0, 0, 0];
+
+  for (let i = 0; i < observedPoints.length; i++) {
+    const row = [observedPoints[i].x, observedPoints[i].y, 1];
+    for (let r = 0; r < 3; r++) {
+      bx[r] += row[r] * targetPoints[i].x;
+      by[r] += row[r] * targetPoints[i].y;
+      for (let c = 0; c < 3; c++) {
+        normal[r][c] += row[r] * row[c];
+      }
+    }
   }
-  element.textContent = `${Math.round(point.radius * CANONICAL_SIZE)} px`;
+
+  const xCoefficients = solveLinearSystem(
+    normal.map((row) => [...row]),
+    [...bx]
+  );
+  const yCoefficients = solveLinearSystem(
+    normal.map((row) => [...row]),
+    [...by]
+  );
+
+  return {
+    a: xCoefficients[0],
+    b: xCoefficients[1],
+    c: xCoefficients[2],
+    d: yCoefficients[0],
+    e: yCoefficients[1],
+    f: yCoefficients[2]
+  };
 }
 
-function calculateRingCalibration() {
-  const scores = [9, 8, 7];
-  const entries = scores
-    .map((score) => ({ score, point: ringReferences[score] }))
-    .filter((entry) => entry.point);
+function applyAffine(point) {
+  if (!affineTransform) return { ...point };
+  const t = affineTransform;
+  return {
+    x: t.a * point.x + t.b * point.y + t.c,
+    y: t.d * point.x + t.e * point.y + t.f
+  };
+}
 
-  if (entries.length < 3) {
+function invertAffine(point) {
+  if (!affineTransform) return { ...point };
+  const t = affineTransform;
+  const determinant = t.a * t.e - t.b * t.d;
+  if (Math.abs(determinant) < 1e-10) return { ...point };
+
+  const shiftedX = point.x - t.c;
+  const shiftedY = point.y - t.f;
+
+  return {
+    x: (t.e * shiftedX - t.b * shiftedY) / determinant,
+    y: (-t.d * shiftedX + t.a * shiftedY) / determinant
+  };
+}
+
+function calculateAffineCalibration() {
+  if (!targetCenter || RING_DIRECTIONS.some((direction) => !ringCalibrationPoints[direction])) {
     calibrationReady = false;
     armBtn.disabled = true;
-    calibrationQuality.textContent =
-      `${entries.length}/3 halka seçildi. 9, 8 ve 7 halkalarının üçü de gerekli.`;
     return false;
   }
 
-  const r9 = ringReferences[9].radius;
-  const r8 = ringReferences[8].radius;
-  const r7 = ringReferences[7].radius;
+  // Dış siyah dairenin kenarı 7 halka çizgisidir.
+  const radius = expectedRingRadiusNormalized(7);
+  const observed = [
+    targetCenter,
+    ringCalibrationPoints.top,
+    ringCalibrationPoints.right,
+    ringCalibrationPoints.bottom,
+    ringCalibrationPoints.left
+  ];
+  const ideal = [
+    { x: 0.5, y: 0.5 },
+    { x: 0.5, y: 0.5 - radius },
+    { x: 0.5 + radius, y: 0.5 },
+    { x: 0.5, y: 0.5 + radius },
+    { x: 0.5 - radius, y: 0.5 }
+  ];
 
-  if (!(r9 < r8 && r8 < r7)) {
+  try {
+    affineTransform = fitAffineTransform(observed, ideal);
+  } catch (error) {
+    affineTransform = null;
     calibrationReady = false;
     armBtn.disabled = true;
-    calibrationQuality.textContent =
-      "Halka sırası hatalı görünüyor. Merkezden uzaklık 9 < 8 < 7 olmalı.";
+    calibrationQuality.textContent = "Kalibrasyon hesaplanamadı. Noktaları yeniden seç.";
     return false;
   }
 
-  let numerator = 0;
-  let denominator = 0;
-
-  for (const { score, point } of entries) {
-    const expected = expectedRingRadiusNormalized(score);
-    numerator += point.radius * expected;
-    denominator += point.radius * point.radius;
-  }
-
-  if (denominator <= 1e-9) {
-    calibrationReady = false;
-    armBtn.disabled = true;
-    calibrationQuality.textContent = "Halka ölçeği hesaplanamadı.";
-    return false;
-  }
-
-  calibrationScale = numerator / denominator;
-
-  const residualsMm = entries.map(({ score, point }) => {
-    const expected = expectedRingRadiusNormalized(score);
-    const predicted = point.radius * calibrationScale;
-    return Math.abs(predicted - expected) * 170;
+  const errorsMm = observed.map((point, index) => {
+    const mapped = applyAffine(point);
+    return Math.hypot(mapped.x - ideal[index].x, mapped.y - ideal[index].y) * 170;
   });
 
-  const maxErrorMm = Math.max(...residualsMm);
-  const averageErrorMm =
-    residualsMm.reduce((total, value) => total + value, 0) / residualsMm.length;
+  const averageError = errorsMm.reduce((sum, value) => sum + value, 0) / errorsMm.length;
+  const maximumError = Math.max(...errorsMm);
+  const determinant = affineTransform.a * affineTransform.e - affineTransform.b * affineTransform.d;
+
+  if (!Number.isFinite(averageError) || Math.abs(determinant) < 1e-6) {
+    affineTransform = null;
+    calibrationReady = false;
+    armBtn.disabled = true;
+    calibrationQuality.textContent = "Kalibrasyon geçersiz. Noktaları yeniden seç.";
+    return false;
+  }
 
   calibrationReady = true;
   armBtn.disabled = false;
 
   let quality = "İyi";
-  if (maxErrorMm > 2.5) quality = "Zayıf";
-  else if (maxErrorMm > 1.2) quality = "Orta";
+  if (maximumError > 2.0) quality = "Zayıf";
+  else if (maximumError > 1.0) quality = "Orta";
 
   calibrationQuality.textContent =
-    `Kalibrasyon hazır · kalite: ${quality} · ortalama hata: ${averageErrorMm.toFixed(1)} mm`;
+    `Kalibrasyon hazır · kalite: ${quality} · ortalama hata: ${averageError.toFixed(1)} mm`;
 
   return true;
 }
 
 function toTargetCoordinates(paperX, paperY) {
-  const center = targetCenter || { x: 0.5, y: 0.5 };
-  const scale = calibrationReady ? calibrationScale : 1;
+  if (calibrationReady && affineTransform) {
+    const mapped = applyAffine({ x: paperX, y: paperY });
+    return { x: clamp01(mapped.x), y: clamp01(mapped.y) };
+  }
 
+  const center = targetCenter || { x: 0.5, y: 0.5 };
   return {
-    x: clamp01(0.5 + (paperX - center.x) * scale),
-    y: clamp01(0.5 + (paperY - center.y) * scale)
+    x: clamp01(0.5 + (paperX - center.x)),
+    y: clamp01(0.5 + (paperY - center.y))
   };
 }
 
 function toPaperCoordinates(targetX, targetY) {
-  const center = targetCenter || { x: 0.5, y: 0.5 };
-  const scale = calibrationReady && calibrationScale > 1e-9
-    ? calibrationScale
-    : 1;
+  if (calibrationReady && affineTransform) {
+    const mapped = invertAffine({ x: targetX, y: targetY });
+    return { x: clamp01(mapped.x), y: clamp01(mapped.y) };
+  }
 
+  const center = targetCenter || { x: 0.5, y: 0.5 };
   return {
-    x: clamp01(center.x + (targetX - 0.5) / scale),
-    y: clamp01(center.y + (targetY - 0.5) / scale)
+    x: clamp01(center.x + (targetX - 0.5)),
+    y: clamp01(center.y + (targetY - 0.5))
   };
+}
+
+function drawMappedRing(score) {
+  if (!calibrationReady || !affineTransform) return;
+
+  const radius = expectedRingRadiusNormalized(score);
+  warpedCtx.beginPath();
+
+  for (let step = 0; step <= 96; step++) {
+    const angle = (step / 96) * Math.PI * 2;
+    const idealPoint = {
+      x: 0.5 + Math.cos(angle) * radius,
+      y: 0.5 + Math.sin(angle) * radius
+    };
+    const paperPoint = invertAffine(idealPoint);
+    const px = paperPoint.x * warpedPreview.width;
+    const py = paperPoint.y * warpedPreview.height;
+
+    if (step === 0) warpedCtx.moveTo(px, py);
+    else warpedCtx.lineTo(px, py);
+  }
+
+  warpedCtx.stroke();
 }
 
 function drawCalibrationOverlay() {
   if (!targetCenter) return;
 
-  const centerX = targetCenter.x * warpedPreview.width;
-  const centerY = targetCenter.y * warpedPreview.height;
-
   warpedCtx.save();
 
-  if (calibrationReady && calibrationScale > 1e-9) {
+  if (calibrationReady && affineTransform) {
     warpedCtx.setLineDash([7, 6]);
     warpedCtx.lineWidth = 1.5;
     warpedCtx.strokeStyle = "rgba(77, 163, 255, .72)";
-
-    for (let score = 10; score >= 1; score--) {
-      const normalizedRadius =
-        expectedRingRadiusNormalized(score) / calibrationScale;
-      const radiusPx = normalizedRadius * warpedPreview.width;
-
-      warpedCtx.beginPath();
-      warpedCtx.arc(centerX, centerY, radiusPx, 0, Math.PI * 2);
-      warpedCtx.stroke();
-    }
-
+    for (let score = 10; score >= 1; score--) drawMappedRing(score);
     warpedCtx.setLineDash([]);
   }
 
-  const selectedStyles = {
-    9: "#4ade80",
-    8: "#fbbf24",
-    7: "#fb7185"
+  const pointStyles = {
+    top: "#4ade80",
+    right: "#fbbf24",
+    bottom: "#fb7185",
+    left: "#60a5fa"
   };
 
-  for (const score of [9, 8, 7]) {
-    const point = ringReferences[score];
+  for (const direction of RING_DIRECTIONS) {
+    const point = ringCalibrationPoints[direction];
     if (!point) continue;
 
-    const pointX = point.x * warpedPreview.width;
-    const pointY = point.y * warpedPreview.height;
-
-    warpedCtx.strokeStyle = selectedStyles[score];
-    warpedCtx.fillStyle = selectedStyles[score];
-    warpedCtx.lineWidth = 3;
-
+    const px = point.x * warpedPreview.width;
+    const py = point.y * warpedPreview.height;
+    warpedCtx.fillStyle = pointStyles[direction];
     warpedCtx.beginPath();
-    warpedCtx.arc(
-      centerX,
-      centerY,
-      point.radius * warpedPreview.width,
-      0,
-      Math.PI * 2
-    );
-    warpedCtx.stroke();
-
-    warpedCtx.beginPath();
-    warpedCtx.arc(pointX, pointY, 7, 0, Math.PI * 2);
+    warpedCtx.arc(px, py, 7, 0, Math.PI * 2);
     warpedCtx.fill();
-
-    warpedCtx.font = "bold 16px system-ui";
-    warpedCtx.fillText(String(score), pointX + 10, pointY - 10);
+    warpedCtx.font = "bold 14px system-ui";
+    warpedCtx.fillText(RING_DIRECTION_LABELS[direction], px + 10, py - 10);
   }
 
+  const centerX = targetCenter.x * warpedPreview.width;
+  const centerY = targetCenter.y * warpedPreview.height;
   warpedCtx.strokeStyle = "#ff3b6b";
   warpedCtx.fillStyle = "rgba(255,59,107,.18)";
   warpedCtx.lineWidth = 3;
@@ -282,7 +337,6 @@ function drawCalibrationOverlay() {
   warpedCtx.arc(centerX, centerY, 13, 0, Math.PI * 2);
   warpedCtx.fill();
   warpedCtx.stroke();
-
   warpedCtx.beginPath();
   warpedCtx.moveTo(centerX - 22, centerY);
   warpedCtx.lineTo(centerX + 22, centerY);
@@ -293,69 +347,74 @@ function drawCalibrationOverlay() {
   warpedCtx.restore();
 }
 
-function beginRingSelection(score) {
+function beginRingCalibration() {
   if (!referenceFrame || !targetCenter) {
     setStatus("Önce temiz hedefi kaydet ve hedef merkezini seç.", "warn");
     return;
   }
 
   detectorArmed = false;
-  armBtn.textContent = "9. Sistemi hazırla";
+  armBtn.textContent = "7. Sistemi hazırla";
   armBtn.className = "";
-  ringSelectionMode = score;
+  armBtn.disabled = true;
+  resetAffineCalibration();
+  centerValue.textContent = "Hazır";
+  ringCalibrationMode = true;
+  ringCalibrationIndex = 0;
+  ringCalBtn.textContent = "Kalibrasyon: 0/4";
 
   setStatus(
-    `Düzeltilmiş hedefte ${score} halka çizgisinin herhangi bir noktasına dokun.`,
+    "Dış siyah dairenin ÜST kenarına dokun. Sonra sağ, alt ve sol gelecek.",
     "warn"
   );
 }
 
-function saveRingReference(score, x, y) {
-  if (!targetCenter) return;
+function saveRingCalibrationPoint(x, y) {
+  const direction = RING_DIRECTIONS[ringCalibrationIndex];
+  ringCalibrationPoints[direction] = { x, y };
 
-  const dx = x - targetCenter.x;
-  const dy = y - targetCenter.y;
-  const radius = Math.hypot(dx, dy);
+  const valueElement = {
+    top: topValue,
+    right: rightValue,
+    bottom: bottomValue,
+    left: leftValue
+  }[direction];
+  valueElement.textContent = "Hazır";
 
-  if (radius < 0.015) {
-    setStatus("Seçilen nokta merkeze fazla yakın. Halka çizgisinin üstüne dokun.", "warn");
-    return;
-  }
-
-  ringReferences[score] = { x, y, radius };
-  ringSelectionMode = null;
-
-  updateRingValue(score, ringReferences[score]);
-
-  if (score === 9) ring9Btn.textContent = "5. 9 halkasını yeniden seç";
-  if (score === 8) ring8Btn.textContent = "6. 8 halkasını yeniden seç";
-  if (score === 7) ring7Btn.textContent = "7. 7 halkasını yeniden seç";
+  ringCalibrationIndex += 1;
+  ringCalBtn.textContent = `Kalibrasyon: ${ringCalibrationIndex}/4`;
 
   if (referenceFrame) {
     warpedCtx.putImageData(referenceFrame, 0, 0);
     drawCalibrationOverlay();
   }
 
-  const ready = calculateRingCalibration();
-
-  if (ready) {
+  if (ringCalibrationIndex < RING_DIRECTIONS.length) {
+    const nextDirection = RING_DIRECTIONS[ringCalibrationIndex];
     setStatus(
-      "9, 8 ve 7 halkaları kaydedildi. Diğer halkalar otomatik hesaplandı.",
+      `Şimdi dış siyah dairenin ${RING_DIRECTION_LABELS[nextDirection].toUpperCase()} kenarına dokun.`,
+      "warn"
+    );
+    return;
+  }
+
+  ringCalibrationMode = false;
+  ringCalBtn.textContent = "5. Kalibrasyonu yeniden yap";
+
+  if (calculateAffineCalibration()) {
+    if (referenceFrame) {
+      warpedCtx.putImageData(referenceFrame, 0, 0);
+      drawCalibrationOverlay();
+    }
+    setStatus(
+      "Beş noktalı kalibrasyon tamamlandı. Mavi halkalar basılı halkalarla çakışmalı.",
       "ok"
     );
     send({
       type: "sensor_event",
-      message: "Halka ölçeği kalibre edildi. Puanlama yeni ölçeğe göre hazır.",
+      message: "Beş noktalı görüntü kalibrasyonu tamamlandı.",
       level: "info"
     });
-  } else {
-    const nextMissing = [9, 8, 7].find((value) => !ringReferences[value]);
-    if (nextMissing) {
-      setStatus(
-        `${score} halkası kaydedildi. Şimdi ${nextMissing} halka çizgisini seç.`,
-        "ok"
-      );
-    }
   }
 }
 
@@ -596,9 +655,9 @@ function resetCorners() {
   centerSelectionMode = false;
   detectorArmed = false;
   centerBtn.disabled = true;
-  setRingButtonsEnabled(false);
-  resetRingCalibration();
-  armBtn.textContent = "9. Sistemi hazırla";
+  setRingCalibrationEnabled(false);
+  resetAffineCalibration();
+  armBtn.textContent = "7. Sistemi hazırla";
   armBtn.disabled = true;
   manualPanel.classList.add("hidden");
   drawOverlay();
@@ -727,8 +786,8 @@ function saveReference() {
 
   targetCenter = null;
   centerSelectionMode = false;
-  resetRingCalibration();
-  setRingButtonsEnabled(false);
+  resetAffineCalibration();
+  setRingCalibrationEnabled(false);
   centerBtn.disabled = false;
   armBtn.disabled = true;
   setStatus(
@@ -764,14 +823,14 @@ async function learnSound() {
 function toggleArm() {
   if (!referenceFrame || corners.length !== 4 || !targetCenter || !calibrationReady) {
     setStatus(
-      "Önce köşeleri, temiz hedefi, merkezi ve 9-8-7 halka referanslarını tamamla.",
+      "Önce köşeleri, temiz hedefi, merkezi ve siyah dairenin dört yönünü tamamla.",
       "warn"
     );
     return;
   }
 
   detectorArmed = !detectorArmed;
-  armBtn.textContent = detectorArmed ? "Sistemi durdur" : "9. Sistemi hazırla";
+  armBtn.textContent = detectorArmed ? "Sistemi durdur" : "7. Sistemi hazırla";
   armBtn.className = detectorArmed ? "danger" : "";
   setStatus(
     detectorArmed
@@ -1044,13 +1103,10 @@ warpedPreview.addEventListener("pointerdown", (event) => {
     targetCenter = { x, y };
     centerSelectionMode = false;
     centerBtn.textContent = "4. Merkezi yeniden seç";
-    resetRingCalibration();
-    setRingButtonsEnabled(true);
-
-    // Mobil tarayıcı önbelleği / DOM senkronizasyonuna karşı ikinci güvence.
-    requestAnimationFrame(() => setRingButtonsEnabled(true));
-    setTimeout(() => setRingButtonsEnabled(true), 100);
-
+    resetAffineCalibration();
+    centerValue.textContent = "Hazır";
+    setRingCalibrationEnabled(true);
+    requestAnimationFrame(() => setRingCalibrationEnabled(true));
     armBtn.disabled = true;
 
     if (referenceFrame) {
@@ -1059,14 +1115,14 @@ warpedPreview.addEventListener("pointerdown", (event) => {
     }
 
     setStatus(
-      "Hedef merkezi kaydedildi. 9, 8 ve 7 halka butonları etkinleştirildi. [FIX-2]",
+      "Merkez kaydedildi. Şimdi siyah daireyi üst, sağ, alt ve sol yönlerden kalibre et.",
       "ok"
     );
     return;
   }
 
-  if (ringSelectionMode !== null) {
-    saveRingReference(ringSelectionMode, x, y);
+  if (ringCalibrationMode) {
+    saveRingCalibrationPoint(x, y);
     return;
   }
 
@@ -1097,11 +1153,11 @@ centerBtn.addEventListener("click", () => {
   }
 
   centerSelectionMode = true;
-  ringSelectionMode = null;
+  ringCalibrationMode = false;
   detectorArmed = false;
-  resetRingCalibration();
-  setRingButtonsEnabled(false);
-  armBtn.textContent = "9. Sistemi hazırla";
+  resetAffineCalibration();
+  setRingCalibrationEnabled(false);
+  armBtn.textContent = "7. Sistemi hazırla";
   armBtn.disabled = true;
 
   setStatus(
@@ -1110,9 +1166,7 @@ centerBtn.addEventListener("click", () => {
   );
 });
 
-ring9Btn.addEventListener("click", () => beginRingSelection(9));
-ring8Btn.addEventListener("click", () => beginRingSelection(8));
-ring7Btn.addEventListener("click", () => beginRingSelection(7));
+ringCalBtn.addEventListener("click", beginRingCalibration);
 
 zoomRange.addEventListener("input", () => {
   softwareZoom = Number(zoomRange.value);
@@ -1124,13 +1178,13 @@ zoomRange.addEventListener("input", () => {
     referenceFrame = null;
     targetCenter = null;
     centerSelectionMode = false;
-    ringSelectionMode = null;
+    ringCalibrationMode = false;
     detectorArmed = false;
     centerBtn.disabled = true;
     centerBtn.textContent = "4. Hedef merkezini seç";
-    setRingButtonsEnabled(false);
-    resetRingCalibration();
-    armBtn.textContent = "9. Sistemi hazırla";
+    setRingCalibrationEnabled(false);
+    resetAffineCalibration();
+    armBtn.textContent = "7. Sistemi hazırla";
     armBtn.className = "";
     armBtn.disabled = true;
     manualPanel.classList.add("hidden");
