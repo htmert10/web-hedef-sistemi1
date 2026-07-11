@@ -84,10 +84,10 @@
 
         <div id="manualPanel" class="hidden">
           <div class="status warn">
-            Atış algılandı, fakat yeni delik kesin bulunamadı. Muhtemel üst üste atış.
+            Yeni işaret güvenilir biçimde bulunamadı. Adayı kontrol et veya konumu elle seç.
           </div>
           <div class="button-row">
-            <button id="confirmSuggestedBtn" class="warn">Önerilen konumu şüpheli kaydet</button>
+            <button id="confirmSuggestedBtn" class="warn">En iyi adayı kaydet</button>
             <button id="cancelManualBtn">İptal</button>
           </div>
         </div>
@@ -95,6 +95,14 @@
     </section>
   </main>
 
-  <script src="/static/js/tablet.js?v=affine-calibration-1"></script>
+    <script>
+    window.Module = {
+      onRuntimeInitialized() {
+        window.dispatchEvent(new Event("opencv-ready"));
+      }
+    };
+  </script>
+  <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
+  <script src="/static/js/tablet.js?v=safe-marker-detection-3"></script>
 </body>
 </html>

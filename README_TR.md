@@ -122,3 +122,40 @@ Bu sürüm tek bir halka yarıçapına göre büyütme yapmak yerine 5 referans 
 5. Dış siyah dairenin sol kenarı
 
 Bu noktalardan 2B affine dönüşüm hesaplanır. Böylece merkez kayması, dönme, yatay/dikey ölçek farkı ve hafif yamulma birlikte düzeltilir. Kalibrasyondan sonra düzeltilmiş hedefte çizilen mavi halkaların basılı halkalarla çakışması gerekir.
+
+
+## Güvenli kalem noktası / etiket algılama sürümü
+
+Bu paket, kâğıt üzerine sonradan eklenen kalem noktası, renkli/siyah etiket veya
+benzeri güvenli görsel değişiklikleri algılamak için düzenlenmiştir.
+
+Yeni algılama motoru:
+
+- Referansı ve yeni görüntüyü 5 karelik zamansal medyanla oluşturur.
+- Küçük X/Y kamera kaymalarını ±6 piksel içinde hizalar.
+- `cv.absdiff` ile hem açılmayı hem koyulaşmayı algılar.
+- Otsu eşikleme ve morfolojik opening uygular.
+- Alan, dairesellik, en-boy oranı ve doluluk oranıyla uzun halka/çizgi
+  parazitlerini eler.
+- Güven skoru üretir.
+- Güven %58 altındaysa veriyi otomatik göndermez; en iyi üç adayı gösterir ve
+  manuel onay ister.
+
+### OpenCV.js
+
+Telefon/tablet sayfası OpenCV.js dosyasını resmi OpenCV CDN'inden yükler.
+İlk açılışta internet bağlantısı gerekir. Tarayıcı eski JavaScript'i önbellekten
+getirirse sekmeyi kapatıp yeniden açın.
+
+### Test sırası
+
+1. Kamerayı açın.
+2. Dört köşeyi seçin.
+3. Görüntü sabitken temiz referansı kaydedin.
+4. Merkez ve dört yönlü halka kalibrasyonunu tamamlayın.
+5. Kâğıda güvenli bir kalem noktası veya etiket ekleyin.
+6. `Test tetikle` düğmesine basın ya da öğretilen sesi kullanın.
+7. Güven düşükse ekrandaki adaylardan birini onaylayın veya konumu elle seçin.
+
+Hiçbir kamera sistemi için %100 doğruluk garantisi verilemez. Bu sürüm,
+düşük güvenli sonuçları otomatik göndermeyerek yanlış pozitifleri azaltır.
