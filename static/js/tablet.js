@@ -88,6 +88,7 @@ const MERGED_AREA_THRESHOLD = 360;
 const MAX_COMPONENT_AREA = 5200;
 
 let referenceMedianGray = null;
+let referenceGrayBuffer = null;
 let pendingMedianGray = null;
 let pendingPreviewFrame = null;
 let lastTriggerAt = 0;
@@ -166,6 +167,42 @@ function replaceReferenceMedian(nextMat) {
   referenceMedianGray = nextMat;
 }
 
+function clearReferenceData() {
+  replaceReferenceMedian(null);
+  referenceGrayBuffer = null;
+}
+
+function storeReferenceBufferFromImageData(imageData) {
+  referenceGrayBuffer = imageDataToGrayBuffer(imageData);
+  replaceReferenceMedian(null);
+}
+
+function matFromGrayBuffer(buffer, width, height) {
+  if (!buffer || buffer.length !== width * height) {
+    throw new Error("Referans gri tamponu geçersiz.");
+  }
+
+  const mat = new cv.Mat(height, width, cv.CV_8UC1);
+  mat.data.set(buffer);
+  return mat;
+}
+
+function ensureReferenceMat() {
+  if (referenceMedianGray) return referenceMedianGray;
+
+  if (!referenceGrayBuffer) {
+    throw new Error("Temiz referans bulunamadı.");
+  }
+
+  referenceMedianGray = matFromGrayBuffer(
+    referenceGrayBuffer,
+    CANONICAL_SIZE,
+    CANONICAL_SIZE
+  );
+
+  return referenceMedianGray;
+}
+
 function clearPendingDetection() {
   deleteMat(pendingMedianGray);
   pendingMedianGray = null;
@@ -176,6 +213,7 @@ function clearPendingDetection() {
 
 function commitPendingReference() {
   if (pendingMedianGray) {
+    referenceGrayBuffer = pendingMedianGray.data.slice();
     replaceReferenceMedian(pendingMedianGray.clone());
   }
 
@@ -768,7 +806,7 @@ overlay.addEventListener("pointerdown", (event) => {
 function resetCorners() {
   corners = [];
   referenceFrame = null;
-  replaceReferenceMedian(null);
+  clearReferenceData();
   clearPendingDetection();
   targetCenter = null;
   centerSelectionMode = false;
@@ -1053,32 +1091,27 @@ async function saveReference() {
   referenceBtn.disabled = true;
 
   try {
-    await ensureOpenCvReady();
-
     setStatus(
-      "Tek sabit kareden referans hazırlanıyor...",
+      "Referans saf JavaScript ile hazırlanıyor...",
       "warn"
     );
 
-    // Önce tarayıcıya durum mesajını çizme fırsatı ver.
     await yieldToBrowser();
 
     const rawFrame = captureRawFrame();
-
-    // En ağır bölüm yalnızca bir kez çalışır.
     const warped = warpFrame(rawFrame);
 
     await yieldToBrowser();
 
-    const gray = grayMatFromWarpedImageData(warped);
-    replaceReferenceMedian(gray);
-    clearPendingDetection();
+    // Burada OpenCV veya WebAssembly kullanılmaz.
+    storeReferenceBufferFromImageData(warped);
 
+    clearPendingDetection();
     referenceFrame = warped;
+
     warpedCtx.putImageData(referenceFrame, 0, 0);
     drawCalibrationOverlay();
 
-    // Eski yüksek çözünürlüklü kare geçmişini temizle.
     lastRawFrames = [rawFrame];
 
     targetCenter = null;
@@ -1780,7 +1813,7 @@ function drawMarkerCandidates(detection) {
 async function triggerProcessPipeline() {
   if (
     triggerLocked ||
-    !referenceMedianGray ||
+    (!referenceMedianGray && !referenceGrayBuffer) ||
     corners.length !== 4
   ) {
     return;
@@ -1791,6 +1824,9 @@ async function triggerProcessPipeline() {
 
   try {
     await ensureOpenCvReady();
+
+    // OpenCV matrisi ancak algılama gerçekten başlatıldığında oluşturulur.
+    const activeReferenceGray = ensureReferenceMat();
 
     send({
       type: "sensor_event",
@@ -1809,7 +1845,7 @@ async function triggerProcessPipeline() {
     const rawFrames = await collectRawFrames();
     const currentMedian = await buildMedianWarpedGray(rawFrames);
     const detection = findNewMarker(
-      referenceMedianGray,
+      activeReferenceGray,
       currentMedian.gray
     );
 
@@ -1833,6 +1869,7 @@ async function triggerProcessPipeline() {
       });
 
       // Başarılı işaret yeni referansın parçası olur.
+      referenceGrayBuffer = currentMedian.gray.data.slice();
       replaceReferenceMedian(currentMedian.gray.clone());
       referenceFrame = currentMedian.preview;
       currentMedian.gray.delete();
@@ -1985,7 +2022,7 @@ zoomRange.addEventListener("input", () => {
   if (corners.length > 0 || referenceFrame) {
     corners = [];
     referenceFrame = null;
-    replaceReferenceMedian(null);
+    clearReferenceData();
     clearPendingDetection();
     targetCenter = null;
     centerSelectionMode = false;

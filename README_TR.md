@@ -216,3 +216,20 @@ tek-parça piksel işlemi düzeltildi.
 
 Bu sürümde `Temiz hedefi kaydet` işleminin tarayıcıyı kapatması veya sayfayı
 kilitlemesi beklenmez. Bir hata kalırsa ekranda artık gerçek hata mesajı görünür.
+
+
+## Reference No-OpenCV Fix
+
+Bu sürümde `Temiz hedefi kaydet` yolu OpenCV/WebAssembly'den tamamen ayrıldı.
+
+- Referans, perspektifi düzeltilmiş `ImageData` üzerinden saf JavaScript gri tamponu
+  olarak kaydedilir.
+- `cv.Mat` yalnızca otomatik değişiklik algılama gerçekten başlatıldığında oluşturulur.
+- Köşe seçimi ve referans kaydı sırasında OpenCV belleği kullanılmaz.
+- Referans sıfırlama ve zoom değişiminde hem JavaScript tamponu hem OpenCV matrisi
+  temizlenir.
+- Otomatik veya manuel kabul edilen yeni güvenli işaretlerden sonra iki referans biçimi
+  birlikte güncellenir.
+
+Bu düzeltme özellikle `Temiz hedefi kaydet` düğmesine basıldığı anda tarayıcı
+sekmesinin kapanması, yeniden yüklenmesi veya boş ekrana düşmesi sorununu hedefler.
