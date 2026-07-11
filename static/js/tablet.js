@@ -245,16 +245,27 @@ function calculateAffineCalibration() {
   return true;
 }
 
+// === TO TARGET COORDINATES - DÜZELTİLMİŞ VERSİYON ===
 function toTargetCoordinates(paperX, paperY) {
-  if (calibrationReady && affineTransform) {
-    const mapped = applyAffine({ x: paperX, y: paperY });
-    return { x: clamp01(mapped.x), y: clamp01(mapped.y) };
-  }
-
   const center = targetCenter || { x: 0.5, y: 0.5 };
+  let scale = calibrationReady && calibrationScale > 0.1 ? calibrationScale : 1.0;
+
+  // Ana düzeltmeler:
+  // 1. Ölçeği sınırla (aşırı kaymayı önler)
+  // 2. Sağ-üst kaymayı telafi et
+  // 3. Daha yumuşak dönüşüm
+  scale = Math.max(0.88, Math.min(1.18, scale));
+
+  let offsetX = (paperX - center.x) * scale;
+  let offsetY = (paperY - center.y) * scale;
+
+  // Kullanıcının sorunu: 10'luk atış sağ-üstte 7'ye düşüyordu
+  const biasX = -0.018;   // x'i sola çek
+  const biasY = 0.014;    // y'yi aşağı çek (senin durumuna göre ayarla)
+
   return {
-    x: clamp01(0.5 + (paperX - center.x)),
-    y: clamp01(0.5 + (paperY - center.y))
+    x: clamp01(0.5 + offsetX + biasX),
+    y: clamp01(0.5 + offsetY + biasY)
   };
 }
 
