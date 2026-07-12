@@ -1,4 +1,20 @@
-<!doctype html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dijital Hedef</title><link rel="stylesheet" href="/static/css/style.css?v=3"></head>
-<body><main class="match-shell"><header><div><p class="eyebrow">ATIŞ HATTI</p><h1 id="matchName">Serbest antrenman</h1></div><div class="clock" id="clock">--:--</div></header>
-<section class="match-grid"><div class="target-panel"><canvas id="target" width="760" height="760"></canvas></div><aside class="score-panel"><div class="metrics"><div><span>ATIŞ</span><strong id="count">0</strong></div><div><span>TOPLAM</span><strong id="total">0</strong></div><div><span>ORTALAMA</span><strong id="average">0.00</strong></div><div><span>GRUPMAN</span><strong id="group">0 mm</strong></div></div><div class="last-shot"><span>SON ATIŞ</span><strong id="lastScore">—</strong><small id="lastMeta">Atış bekleniyor</small></div><h2>Seriler</h2><div id="series" class="series"></div><div class="shot-list" id="shotList"></div></aside></section>
-<section class="control-bar"><select id="preset"><option value="free">Serbest antrenman</option><option value="40-50">40 atış · 50 dk</option><option value="50-50">50 atış · 50 dk</option><option value="60-75">ISSF 60 atış · 75 dk</option></select><button id="configure">Maçı hazırla</button><button id="startMatch" class="primary">Başlat</button><button id="stopMatch">Durdur</button><button id="deleteLast">Son atışı sil</button><button id="reset" class="danger">Sıfırla</button></section></main><script src="/static/js/dashboard.js?v=clean-1"></script></body></html>
+<!doctype html>
+<html lang="tr">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#080b0d"><title>Dijital Hedef</title><link rel="stylesheet" href="/static/css/style.css?v=4"></head>
+<body>
+<main class="match-shell">
+  <header class="page-head"><div><a class="mini-brand" href="/"><span>HM</span> by halilmert</a><p class="eyebrow">CANLI ATIŞ HATTI</p><h1 id="matchName">Serbest antrenman</h1></div><div><small>KALAN SÜRE</small><div class="clock" id="clock">--:--</div></div></header>
+  <section class="match-grid">
+    <div class="target-panel"><div class="panel-label"><span>DİJİTAL HEDEF</span><span class="live-dot">CANLI</span></div><canvas id="target" width="760" height="760"></canvas></div>
+    <aside class="score-panel">
+      <div class="metrics"><div><span>ATIŞ</span><strong id="count">0</strong></div><div><span>TOPLAM</span><strong id="total">0</strong></div><div><span>ORTALAMA</span><strong id="average">0.00</strong></div><div><span>GRUPMAN</span><strong id="group">0 mm</strong></div></div>
+      <div class="last-shot"><span>SON ATIŞ</span><strong id="lastScore">—</strong><small id="lastMeta">Atış bekleniyor</small></div>
+      <h2>10’lu seriler</h2><div id="series" class="series"><span>Henüz seri yok</span></div>
+      <h2>Atış geçmişi</h2><div class="shot-list" id="shotList"></div>
+    </aside>
+  </section>
+  <section class="control-bar"><label><span>MAÇ TÜRÜ</span><select id="preset"><option value="free">Serbest antrenman</option><option value="40-50">40 atış · 50 dk</option><option value="50-50">50 atış · 50 dk</option><option value="60-75">ISSF 60 atış · 75 dk</option></select></label><button id="configure">Maçı hazırla</button><button id="startMatch" class="primary">▶ Başlat</button><button id="stopMatch">Durdur</button><button id="deleteLast">Son atışı sil</button><button id="reset" class="danger">Seriyi sıfırla</button></section>
+  <footer class="app-footer">Hedef Takip Sistemi · <strong>by halilmert</strong></footer>
+</main>
+<script src="/static/js/dashboard.js?v=clean-2"></script>
+</body></html>
