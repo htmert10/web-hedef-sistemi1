@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import json
 import math
-import socket
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -13,8 +12,10 @@ from fastapi.staticfiles import StaticFiles
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
+TARGET_MM = 170.0
+PELLET_RADIUS_MM = 2.25
 
-app = FastAPI(title="Web Hedef Sistemi")
+app = FastAPI(title="Hedef Takip Sistemi")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
@@ -25,117 +26,117 @@ class Shot:
     x: float
     y: float
     score: int
+    decimal: float
     confidence: float
-    status: str
     source: str
 
 
-class SessionState:
+class MatchState:
     def __init__(self) -> None:
         self.shots: list[Shot] = []
         self.next_id = 1
+        self.match = {
+            "name": "Serbest antrenman",
+            "shot_limit": 0,
+            "duration_seconds": 0,
+            "started_at": None,
+            "running": False,
+        }
 
     @staticmethod
-    def calculate_score(x: float, y: float) -> int:
-        """
-        x/y: 0..1 normalized coordinates over a 170 mm square paper target.
-        Center-distance scoring thresholds are spaced at 8 mm for 4.5 mm
-        projectile-center estimation. This is an MVP estimate and should be
-        calibrated against the exact printed target before serious use.
-        """
-        dx_mm = (x - 0.5) * 170.0
-        dy_mm = (y - 0.5) * 170.0
-        distance_mm = math.hypot(dx_mm, dy_mm)
-        for score in range(10, 0, -1):
-            threshold_mm = (11 - score) * 8.0
-            if distance_mm <= threshold_mm:
-                return score
-        return 0
+    def scores(x: float, y: float) -> tuple[int, float]:
+        distance_mm = math.hypot(x - 0.5, y - 0.5) * TARGET_MM
+        integer = 0
+        for value in range(10, 0, -1):
+            if distance_mm <= (11 - value) * 8.0 + 1e-9:
+                integer = value
+                break
 
-    def add_shot(
-        self,
-        x: float,
-        y: float,
-        confidence: float,
-        status: str,
-        source: str,
-    ) -> Shot:
-        x = min(1.0, max(0.0, float(x)))
-        y = min(1.0, max(0.0, float(y)))
-        shot = Shot(
-            id=self.next_id,
-            number=len(self.shots) + 1,
-            x=x,
-            y=y,
-            score=self.calculate_score(x, y),
-            confidence=min(1.0, max(0.0, float(confidence))),
-            status=status if status in {"confirmed", "suspect"} else "suspect",
-            source=source,
+        # Her 0.8 mm yarıçap artışı ondalık puanı 0.1 azaltır.
+        decimal = max(0.0, min(10.9, 10.9 - distance_mm / 8.0))
+        return integer, round(decimal, 1)
+
+    def add_shot(self, message: dict[str, Any]) -> None:
+        limit = int(self.match["shot_limit"] or 0)
+        if limit and len(self.shots) >= limit:
+            return
+
+        x = min(1.0, max(0.0, float(message.get("x", 0.5))))
+        y = min(1.0, max(0.0, float(message.get("y", 0.5))))
+        score, decimal = self.scores(x, y)
+        self.shots.append(
+            Shot(
+                id=self.next_id,
+                number=len(self.shots) + 1,
+                x=x,
+                y=y,
+                score=score,
+                decimal=decimal,
+                confidence=min(1.0, max(0.0, float(message.get("confidence", 0.0)))),
+                source=str(message.get("source", "camera")),
+            )
         )
         self.next_id += 1
-        self.shots.append(shot)
-        return shot
-
-    def delete_last(self) -> None:
-        if self.shots:
-            self.shots.pop()
-        for index, shot in enumerate(self.shots, start=1):
-            shot.number = index
 
     def reset(self) -> None:
         self.shots.clear()
         self.next_id = 1
 
     def payload(self) -> dict[str, Any]:
-        total = sum(s.score for s in self.shots)
-        average = total / len(self.shots) if self.shots else 0.0
+        total = sum(shot.score for shot in self.shots)
+        decimal_total = round(sum(shot.decimal for shot in self.shots), 1)
+        group_mm = 0.0
+        for index, first in enumerate(self.shots):
+            for second in self.shots[index + 1 :]:
+                group_mm = max(
+                    group_mm,
+                    math.hypot(first.x - second.x, first.y - second.y) * TARGET_MM,
+                )
 
-        max_distance_mm = 0.0
-        for i, first in enumerate(self.shots):
-            for second in self.shots[i + 1 :]:
-                dx = (first.x - second.x) * 170.0
-                dy = (first.y - second.y) * 170.0
-                max_distance_mm = max(max_distance_mm, math.hypot(dx, dy))
+        series = []
+        for start in range(0, len(self.shots), 10):
+            block = self.shots[start : start + 10]
+            series.append(sum(shot.score for shot in block))
 
         return {
             "type": "state",
-            "shots": [asdict(s) for s in self.shots],
+            "shots": [asdict(shot) for shot in self.shots],
+            "match": self.match,
             "stats": {
                 "count": len(self.shots),
                 "total": total,
-                "average": round(average, 2),
-                "group_mm": round(max_distance_mm, 1),
+                "decimal_total": decimal_total,
+                "average": round(total / len(self.shots), 2) if self.shots else 0,
+                "group_mm": round(group_mm, 1),
+                "series": series,
             },
         }
 
 
-state = SessionState()
+state = MatchState()
 
 
-class ConnectionManager:
+class Connections:
     def __init__(self) -> None:
-        self.connections: set[WebSocket] = set()
+        self.items: set[WebSocket] = set()
 
-    async def connect(self, websocket: WebSocket) -> None:
-        await websocket.accept()
-        self.connections.add(websocket)
-        await websocket.send_json(state.payload())
-
-    def disconnect(self, websocket: WebSocket) -> None:
-        self.connections.discard(websocket)
+    async def connect(self, socket: WebSocket) -> None:
+        await socket.accept()
+        self.items.add(socket)
+        await socket.send_json(state.payload())
 
     async def broadcast(self, payload: dict[str, Any]) -> None:
-        stale: list[WebSocket] = []
-        for connection in list(self.connections):
+        dead: list[WebSocket] = []
+        for socket in list(self.items):
             try:
-                await connection.send_json(payload)
+                await socket.send_json(payload)
             except Exception:
-                stale.append(connection)
-        for connection in stale:
-            self.disconnect(connection)
+                dead.append(socket)
+        for socket in dead:
+            self.items.discard(socket)
 
 
-manager = ConnectionManager()
+connections = Connections()
 
 
 @app.get("/")
@@ -158,62 +159,42 @@ async def health() -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
-@app.get("/api/local-ip")
-async def local_ip() -> JSONResponse:
-    ip = "127.0.0.1"
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-            sock.connect(("8.8.8.8", 80))
-            ip = sock.getsockname()[0]
-    except OSError:
-        pass
-    return JSONResponse({"ip": ip})
-
-
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket) -> None:
-    await manager.connect(websocket)
+async def websocket(socket: WebSocket) -> None:
+    await connections.connect(socket)
     try:
         while True:
-            data = await websocket.receive_text()
             try:
-                message = json.loads(data)
+                message = json.loads(await socket.receive_text())
             except json.JSONDecodeError:
                 continue
 
             kind = message.get("type")
-
             if kind == "shot":
-                state.add_shot(
-                    x=message.get("x", 0.5),
-                    y=message.get("y", 0.5),
-                    confidence=message.get("confidence", 0.5),
-                    status=message.get("status", "suspect"),
-                    source=message.get("source", "camera"),
-                )
-                await manager.broadcast(state.payload())
-
-            elif kind == "delete_last":
-                state.delete_last()
-                await manager.broadcast(state.payload())
-
+                state.add_shot(message)
+            elif kind == "delete_last" and state.shots:
+                state.shots.pop()
             elif kind == "reset":
                 state.reset()
-                await manager.broadcast(state.payload())
+            elif kind == "configure_match":
+                state.reset()
+                state.match = {
+                    "name": str(message.get("name", "Özel maç"))[:80],
+                    "shot_limit": max(0, min(200, int(message.get("shot_limit", 0)))),
+                    "duration_seconds": max(0, min(8 * 3600, int(message.get("duration_seconds", 0)))),
+                    "started_at": None,
+                    "running": False,
+                }
+            elif kind == "start_match":
+                state.match["started_at"] = message.get("started_at")
+                state.match["running"] = True
+            elif kind == "stop_match":
+                state.match["running"] = False
+            else:
+                continue
 
-            elif kind == "request_state":
-                await websocket.send_json(state.payload())
-
-            elif kind == "sensor_event":
-                await manager.broadcast(
-                    {
-                        "type": "sensor_event",
-                        "message": str(message.get("message", "Sensör olayı")),
-                        "level": str(message.get("level", "info")),
-                    }
-                )
-
+            await connections.broadcast(state.payload())
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
+        connections.items.discard(socket)
     except Exception:
-        manager.disconnect(websocket)
+        connections.items.discard(socket)
