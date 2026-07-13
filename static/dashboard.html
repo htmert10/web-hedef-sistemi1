@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#080b0d">
   <title>Dijital Hedef · HalilMert Target</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=auto-1">
+  <link rel="stylesheet" href="/static/css/style.css?v=auto-2">
 </head>
 <body>
 <main class="match-shell">
@@ -13,6 +13,22 @@
     <div><a class="mini-brand" href="/"><span>HM</span> by halilmert</a><p class="eyebrow">CANLI ATIŞ HATTI</p><h1 id="matchName">Serbest antrenman</h1></div>
     <div><small>KALAN SÜRE</small><div class="clock" id="clock">--:--</div></div>
   </header>
+  <details id="sensorSetup" class="dashboard-sensor" open>
+    <summary><span><b>Kamera algılama kurulumu</b><small>Bu ekranda kalırken otomatik atış algılama</small></span><strong id="sensorSummary">Kurulum gerekli</strong></summary>
+    <section class="sensor-grid embedded-sensor">
+      <article class="panel">
+        <div class="panel-label"><span>CANLI KAMERA</span><span>Kâğıdı kadraja mümkün olduğunca büyük al</span></div>
+        <div class="camera-stage"><video id="video" playsinline muted></video><canvas id="camera"></canvas><canvas id="overlay"></canvas></div>
+        <div id="status" class="status">Kamerayı açarak kuruluma başla.</div>
+        <div class="steps"><button id="start" class="primary">1 · Kamerayı aç</button><button id="corners" disabled>2 · Dört köşeyi seç</button><button id="reference" disabled>3 · Temiz hedefi kaydet</button><button id="arm" disabled>4 · Otomatik taramayı başlat</button><button id="test" disabled>Şimdi kontrol et</button></div>
+      </article>
+      <aside class="panel">
+        <div class="panel-title"><div><span class="section-kicker">CANLI KONTROL</span><h2>Düzeltilmiş hedef</h2></div><span id="connection" class="pill">Bağlanıyor</span></div>
+        <canvas id="warped" width="400" height="400"></canvas>
+        <div class="settings"><label><span>Minimum delik boyutu <strong id="sizeLabel">3.5 mm</strong></span><input id="minSize" type="range" min="2" max="7" value="3.5" step="0.5"></label><label><span>Algılama hassasiyeti <strong id="sensitivityLabel">Normal</strong></span><input id="sensitivity" type="range" min="0" max="2" value="1"></label></div>
+      </aside>
+    </section>
+  </details>
   <section class="match-grid">
     <div class="target-panel"><div class="panel-label"><span>DİJİTAL HEDEF · 10 M HAVALI TABANCA</span><span class="live-dot">CANLI</span></div><canvas id="target" width="760" height="760"></canvas></div>
     <aside class="score-panel">
@@ -28,6 +44,7 @@
   </section>
   <footer class="app-footer">HalilMert Target System · <strong>by halilmert</strong></footer>
 </main>
-<script src="/static/js/dashboard.js?v=auto-1"></script>
+<script type="module" src="/static/js/dashboard.js?v=auto-2"></script>
+<script type="module" src="/static/js/tablet.js?v=auto-3"></script>
 </body>
 </html>

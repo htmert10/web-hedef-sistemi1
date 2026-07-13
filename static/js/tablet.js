@@ -36,8 +36,9 @@ async function detect(){
     wctx.putImageData(data.preview,0,0);
     const balanced=balanceTarget(data.current);
     data.current=balanced.gray;
+    const scanFrame=translateFrame(data.current,alignment(data.current));
     const candidates=analyze(data.current).map(candidate=>{
-      const onset=localScanChange(data.current,candidate);
+      const onset=localScanChange(scanFrame,candidate);
       const eventScore=candidate.confidence*.55+Math.min(1,onset/24)*.45;
       return{...candidate,onset,eventScore,ringRisk:nearPrintedRing(candidate)};
     });
@@ -54,7 +55,7 @@ async function detect(){
 
     if(!best){
       candidateTrack=null;
-      lastScanFrame=data.current;
+      lastScanFrame=scanFrame;
       status(`Otomatik izleme aktif · kayma ${balanced.shift.toFixed(1)} px`);
       return;
     }
@@ -62,14 +63,14 @@ async function detect(){
     const same=candidateTrack&&Math.hypot(best.x-candidateTrack.x,best.y-candidateTrack.y)*SIZE<=9;
     if(!same&&best.onset<6.2){
       candidateTrack=null;
-      lastScanFrame=data.current;
+      lastScanFrame=scanFrame;
       status(`Yeni olmayan değişim elendi · yenilik ${best.onset.toFixed(1)}`);
       return;
     }
 
     if(!same&&best.ringRisk&&best.onset<10){
       candidateTrack=null;
-      lastScanFrame=data.current;
+      lastScanFrame=scanFrame;
       status("Halka kenarı titreşimi elendi; yeni atış bekleniyor.");
       return;
     }
@@ -83,7 +84,7 @@ async function detect(){
       confidenceTotal:candidateTrack.confidenceTotal+best.confidence,
       onset:candidateTrack.onset
     }:{x:best.x,y:best.y,count:1,confidenceTotal:best.confidence,onset:best.onset};
-    lastScanFrame=data.current;
+    lastScanFrame=scanFrame;
 
     if(candidateTrack.count<required){
       drawCandidate(best,data.preview,balanced);
@@ -97,7 +98,7 @@ async function detect(){
       y:candidateTrack.y,
       confidence:candidateTrack.confidenceTotal/candidateTrack.count,
       preview:data.preview,
-      current:data.current
+      current:scanFrame
     };
     candidateTrack=null;
     drawCandidate(pending,data.preview,balanced);
@@ -111,7 +112,7 @@ async function detect(){
   }
 }
 function acceptPending(){if(!pending)return;const scorePoint=scoringCoordinates(pending);send({type:"shot",x:scorePoint.x,y:scorePoint.y,confidence:pending.confidence,source:"camera"});absorbAcceptedHole(pending);knownHoles.push({x:pending.x,y:pending.y});wctx.putImageData(pending.preview,0,0);pending=null}
-async function learnCameraNoise(){if(busy)return;busy=true;try{status("Hedef sabitliği öğreniliyor; 3 saniye hedefe dokunma…");const frames=[];for(let index=0;index<4;index++){if(index)await new Promise(resolve=>setTimeout(resolve,260));const data=await captureStable(),balanced=balanceTarget(data.current),shift=alignment(balanced.gray);frames.push(translateFrame(balanced.gray,shift))}if(!armed)return;noiseFloor=new Uint8Array(SIZE*SIZE);for(let i=0;i<noiseFloor.length;i++){let minimum=255,maximum=0;for(const frame of frames){minimum=Math.min(minimum,frame[i]);maximum=Math.max(maximum,frame[i])}noiseFloor[i]=maximum-minimum}lastScanFrame=frames.at(-1);status("Sabitlik öğrenildi; otomatik tarama her saniye çalışıyor.");scanTimer=setInterval(detect,1000)}catch(error){armed=false;status(`Sabitlik öğrenilemedi: ${error.message}`,true)}finally{busy=false}}
+async function learnCameraNoise(){if(busy)return;busy=true;try{status("Hedef sabitliği öğreniliyor; 3 saniye hedefe dokunma…");const frames=[];for(let index=0;index<4;index++){if(index)await new Promise(resolve=>setTimeout(resolve,260));const data=await captureStable(),balanced=balanceTarget(data.current),shift=alignment(balanced.gray);frames.push(translateFrame(balanced.gray,shift))}if(!armed)return;noiseFloor=new Uint8Array(SIZE*SIZE);for(let i=0;i<noiseFloor.length;i++){let minimum=255,maximum=0;for(const frame of frames){minimum=Math.min(minimum,frame[i]);maximum=Math.max(maximum,frame[i])}noiseFloor[i]=maximum-minimum}lastScanFrame=frames.at(-1);status("Sabitlik öğrenildi; otomatik tarama her saniye çalışıyor.");const summary=$("sensorSummary");if(summary)summary.textContent="Algılama açık";$("sensorSetup")?.removeAttribute("open");scanTimer=setInterval(detect,1000)}catch(error){armed=false;status(`Sabitlik öğrenilemedi: ${error.message}`,true)}finally{busy=false}}
 function setAutomaticScanning(enabled){clearInterval(scanTimer);scanTimer=null;if(enabled)learnCameraNoise()}
 $("reference").onclick=async()=>{try{const data=await captureStable();reference=data.current;referenceTarget=targetSignature(reference);lastScanFrame=reference.slice();noiseFloor=null;knownHoles=[];candidateTrack=null;if(!referenceTarget)throw Error("Siyah hedef alanı ölçülemedi. Hedefi kadrajda büyüt ve köşeleri yeniden seç.");wctx.putImageData(data.preview,0,0);$("arm").disabled=false;$("test").disabled=false;status(`Temiz referans kilitlendi · siyah çap ${(referenceTarget.radius*2).toFixed(1)} px · kenar gücü ${referenceTarget.edgeContrast.toFixed(0)}.`)}catch(e){reference=null;referenceTarget=null;lastScanFrame=null;noiseFloor=null;knownHoles=[];candidateTrack=null;status(e.message,true)}};
-$("arm").onclick=()=>{armed=!armed;setAutomaticScanning(armed);$("arm").textContent=armed?"Otomatik taramayı durdur":"4 · Otomatik taramayı başlat";if(!armed)status("Otomatik tarama durduruldu.")};$("test").onclick=detect;$("minSize").oninput=e=>$("sizeLabel").textContent=`${Number(e.target.value).toFixed(1)} mm`;$("sensitivity").oninput=e=>$("sensitivityLabel").textContent=["Düşük","Normal","Yüksek"][e.target.value];$("start").onclick=startCamera;connect();
+$("arm").onclick=()=>{armed=!armed;setAutomaticScanning(armed);$("arm").textContent=armed?"Otomatik taramayı durdur":"4 · Otomatik taramayı başlat";if(!armed){status("Otomatik tarama durduruldu.");const summary=$("sensorSummary");if(summary)summary.textContent="Algılama durdu"}};$("test").onclick=detect;$("minSize").oninput=e=>$("sizeLabel").textContent=`${Number(e.target.value).toFixed(1)} mm`;$("sensitivity").oninput=e=>$("sensitivityLabel").textContent=["Düşük","Normal","Yüksek"][e.target.value];$("start").onclick=startCamera;connect();
