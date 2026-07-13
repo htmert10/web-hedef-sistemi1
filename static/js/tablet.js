@@ -33,6 +33,7 @@ async function detect(){
   try{
     status("Hedef dengeleniyor; bütün yeni değişimler karşılaştırılıyor…");
     const data=await captureStable();
+    wctx.putImageData(data.preview,0,0);
     const balanced=balanceTarget(data.current);
     data.current=balanced.gray;
     const candidates=analyze(data.current).map(candidate=>{
@@ -66,7 +67,7 @@ async function detect(){
       return;
     }
 
-    if(best.ringRisk&&best.onset<10){
+    if(!same&&best.ringRisk&&best.onset<10){
       candidateTrack=null;
       lastScanFrame=data.current;
       status("Halka kenarı titreşimi elendi; yeni atış bekleniyor.");
@@ -85,6 +86,7 @@ async function detect(){
     lastScanFrame=data.current;
 
     if(candidateTrack.count<required){
+      drawCandidate(best,data.preview,balanced);
       status(`Atış doğrulanıyor ${candidateTrack.count}/${required} · güven %${Math.round(best.confidence*100)}`);
       return;
     }
