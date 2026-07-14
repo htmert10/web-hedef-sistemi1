@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#080b0d">
+  <title>Eğlence Maçı · HalilMert Target</title>
+  <link rel="stylesheet" href="/static/css/style.css?v=fun-1">
+</head>
+<body>
+<main class="match-shell fun-shell">
+  <header class="page-head fun-head">
+    <div><a class="mini-brand" href="/"><span>HM</span> by halilmert</a><p class="eyebrow">ARKADAŞLARLA ATIŞ</p><h1>Eğlence Maçı</h1></div>
+    <a class="home-link" href="/">Ana ekran</a>
+  </header>
+
+  <details id="sensorSetup" class="dashboard-sensor" open>
+    <summary><span><b>Kamera algılama kurulumu</b><small>Bir kez hazırla, maç boyunca bu sayfada kal</small></span><strong id="sensorSummary">Kurulum gerekli</strong></summary>
+    <section class="sensor-grid embedded-sensor">
+      <article class="panel">
+        <div class="panel-label"><span>CANLI KAMERA</span><span>Kâğıdı kadraja mümkün olduğunca büyük al</span></div>
+        <div class="camera-stage"><video id="video" playsinline muted></video><canvas id="camera"></canvas><canvas id="overlay"></canvas></div>
+        <div id="status" class="status">Kamerayı açarak kuruluma başla.</div>
+        <div class="steps"><button id="start" class="primary">1 · Kamerayı aç</button><button id="corners" disabled>2 · Dört köşeyi seç</button><button id="reference" disabled>3 · Temiz hedefi kaydet</button><button id="arm" disabled>4 · Otomatik taramayı başlat</button><button id="test" disabled>Şimdi kontrol et</button></div>
+      </article>
+      <aside class="panel">
+        <div class="panel-title"><div><span class="section-kicker">CANLI KONTROL</span><h2>Düzeltilmiş hedef</h2></div><span id="connection" class="pill">Bağlanıyor</span></div>
+        <canvas id="warped" width="400" height="400"></canvas>
+        <div class="settings"><label><span>Minimum delik boyutu <strong id="sizeLabel">3.5 mm</strong></span><input id="minSize" type="range" min="2" max="7" value="3.5" step="0.5"></label><label><span>Algılama hassasiyeti <strong id="sensitivityLabel">Normal</strong></span><input id="sensitivity" type="range" min="0" max="2" value="1"></label></div>
+      </aside>
+    </section>
+  </details>
+
+  <section id="funSetup" class="fun-setup panel">
+    <div class="fun-setup-copy"><span class="section-kicker">MAÇI KUR</span><h2>Kimler yarışıyor?</h2><p>İsimleri ekle, kişi başı atış sayısını seç. Her oyuncu sırası geldiğinde bütün atışlarını tamamlar.</p></div>
+    <div class="player-builder">
+      <div class="player-entry"><input id="playerName" maxlength="30" autocomplete="off" placeholder="Oyuncunun adı"><button id="addPlayer">+ Oyuncu ekle</button></div>
+      <div id="playerChips" class="player-chips"></div>
+      <label class="shot-choice"><span>KİŞİ BAŞI ATIŞ</span><select id="funShotCount"><option value="3">3 atış · Hızlı</option><option value="5" selected>5 atış · Klasik</option><option value="10">10 atış · Uzun</option></select></label>
+      <button id="launchFun" class="primary fun-launch" disabled>Maçı başlat →</button>
+      <small id="setupHint">Başlamak için en az 2 oyuncu ekle.</small>
+    </div>
+  </section>
+
+  <section id="funArena" class="hidden">
+    <div class="turn-banner"><span>SIRA SENDE</span><strong id="currentPlayer">—</strong><div><b id="turnProgress">0 / 5</b><small>Atış tamamlandı</small></div></div>
+    <div class="fun-grid">
+      <article class="target-panel"><div class="panel-label"><span>CANLI HEDEF</span><span class="live-dot">MAÇ AÇIK</span></div><canvas id="target" width="760" height="760"></canvas></article>
+      <aside class="score-panel fun-score-panel">
+        <span class="section-kicker">CANLI SIRALAMA</span><div id="funStandings" class="fun-standings"></div>
+        <div class="last-shot fun-last"><span>SON ATIŞ</span><strong id="funLastScore">—</strong><small id="funLastMeta">Atış bekleniyor</small></div>
+        <h2>Bu oyuncunun atışları</h2><div id="playerShots" class="player-shots"></div>
+      </aside>
+    </div>
+    <div class="fun-controls"><button id="funDeleteLast">Son atışı sil</button><button id="abandonFun" class="danger">Yeni maç kur</button></div>
+  </section>
+
+  <section id="ceremony" class="ceremony hidden">
+    <span class="eyebrow">MAÇ TAMAMLANDI</span><h2>İşte podyum!</h2><div id="podium" class="podium"></div>
+    <div id="allResults" class="all-results"></div>
+    <button id="newFun" class="primary">Yeni maç kur</button>
+  </section>
+  <footer class="app-footer">HalilMert Target System · <strong>by halilmert</strong></footer>
+</main>
+<script type="module" src="/static/js/fun.js?v=fun-1"></script>
+<script type="module" src="/static/js/tablet.js?v=auto-5"></script>
+</body>
+</html>
