@@ -26,7 +26,6 @@ function drawCandidate(candidate,preview,balance){let x=candidate.x*SIZE,y=candi
 function localScanChange(current,candidate){if(!lastScanFrame)return Infinity;const cx=candidate.x*(SIZE-1),cy=candidate.y*(SIZE-1),radius=8,changes=[];for(let y=Math.max(0,Math.floor(cy-radius));y<=Math.min(SIZE-1,Math.ceil(cy+radius));y++)for(let x=Math.max(0,Math.floor(cx-radius));x<=Math.min(SIZE-1,Math.ceil(cx+radius));x++){if((x-cx)**2+(y-cy)**2>radius*radius)continue;const i=y*SIZE+x,raw=Math.abs(current[i]-lastScanFrame[i]),cameraNoise=(noiseFloor?.[i]||0)*1.35;changes.push(Math.max(0,raw-cameraNoise))}changes.sort((a,b)=>b-a);const count=Math.max(12,Math.ceil(changes.length*.2)),strongest=changes.slice(0,count);return strongest.reduce((sum,value)=>sum+value,0)/strongest.length}
 function frameMotion(current,previous){if(!previous)return{level:0,ratio:0};const values=[];let changed=0,total=0;const radius=Math.min(SIZE*.47,referenceTarget.radius*2.62),radiusSquared=radius*radius;for(let y=6;y<SIZE-6;y+=4)for(let x=6;x<SIZE-6;x+=4){if((x-referenceTarget.cx)**2+(y-referenceTarget.cy)**2>radiusSquared)continue;const i=y*SIZE+x,residual=Math.max(0,Math.abs(current[i]-previous[i])-(noiseFloor?.[i]||0)*1.4);values.push(residual);if(residual>12)changed++;total++}values.sort((a,b)=>a-b);return{level:values[Math.floor(values.length*.8)]||0,ratio:total?changed/total:0}}
 function nearPrintedRing(candidate){const x=candidate.x*(SIZE-1),y=candidate.y*(SIZE-1),distance=Math.hypot(x-referenceTarget.cx,y-referenceTarget.cy),pixelsPerMm=referenceTarget.radius/29.75;if(Math.abs(distance-referenceTarget.radius)<=10)return true;for(let score=1;score<=10;score++){const ringRadius=((11-score)*8-2.25)*pixelsPerMm;if(Math.abs(distance-ringRadius)<=5)return true}return false}
-function absorbAcceptedHole(shot){const cx=shot.x*(SIZE-1),cy=shot.y*(SIZE-1),inner=18,outer=27;let offsetTotal=0,offsetCount=0;for(let y=Math.max(0,Math.floor(cy-outer));y<=Math.min(SIZE-1,Math.ceil(cy+outer));y++)for(let x=Math.max(0,Math.floor(cx-outer));x<=Math.min(SIZE-1,Math.ceil(cx+outer));x++){const distance=Math.hypot(x-cx,y-cy);if(distance>=inner&&distance<=outer){const i=y*SIZE+x;offsetTotal+=reference[i]-shot.current[i];offsetCount++}}const offset=Math.max(-30,Math.min(30,offsetCount?offsetTotal/offsetCount:0)),patchRadius=Math.max(15,Number($("minSize").value)/TARGET_MM*SIZE*2),patchRadiusSquared=patchRadius*patchRadius;for(let y=Math.max(0,Math.floor(cy-patchRadius));y<=Math.min(SIZE-1,Math.ceil(cy+patchRadius));y++)for(let x=Math.max(0,Math.floor(cx-patchRadius));x<=Math.min(SIZE-1,Math.ceil(cx+patchRadius));x++){if((x-cx)**2+(y-cy)**2>patchRadiusSquared)continue;const i=y*SIZE+x;reference[i]=Math.max(0,Math.min(255,Math.round(shot.current[i]+offset)))}}
 function scoringCoordinates(shot){const pixelsPerMm=referenceTarget.radius/29.75,xMm=(shot.x*(SIZE-1)-referenceTarget.cx)/pixelsPerMm,yMm=(shot.y*(SIZE-1)-referenceTarget.cy)/pixelsPerMm;return{x:Math.max(0,Math.min(1,.5+xMm/TARGET_MM)),y:Math.max(0,Math.min(1,.5+yMm/TARGET_MM))}}
 async function detect(){
   if(busy||!reference||pending)return;
@@ -135,7 +134,21 @@ async function detect(){
     busy=false;
   }
 }
-function acceptPending(){if(!pending)return;const scorePoint=scoringCoordinates(pending);send({type:"shot",x:scorePoint.x,y:scorePoint.y,confidence:pending.confidence,source:"camera"});absorbAcceptedHole(pending);knownHoles.push({x:pending.x,y:pending.y});wctx.putImageData(pending.preview,0,0);pending=null}
+function acceptPending(){
+  if(!pending)return;
+  const accepted=pending;
+  const scorePoint=scoringCoordinates(accepted);
+  send({type:"shot",x:scorePoint.x,y:scorePoint.y,confidence:accepted.confidence,source:"camera"});
+  knownHoles.push({x:accepted.x,y:accepted.y});
+  reference=accepted.current.slice();
+  referenceTarget=targetSignature(reference)||referenceTarget;
+  lastScanFrame=reference.slice();
+  previousScanFrame=reference.slice();
+  stableScanCount=0;
+  candidateTrack=null;
+  wctx.putImageData(accepted.preview,0,0);
+  pending=null;
+}
 async function learnCameraNoise(){if(busy)return;busy=true;try{status("Hedef sabitliği öğreniliyor; 3 saniye hedefe dokunma…");const frames=[];for(let index=0;index<4;index++){if(index)await new Promise(resolve=>setTimeout(resolve,260));const data=await captureStable(),balanced=balanceTarget(data.current),shift=alignment(balanced.gray);frames.push(translateFrame(balanced.gray,shift))}if(!armed)return;noiseFloor=new Uint8Array(SIZE*SIZE);for(let i=0;i<noiseFloor.length;i++){let minimum=255,maximum=0;for(const frame of frames){minimum=Math.min(minimum,frame[i]);maximum=Math.max(maximum,frame[i])}noiseFloor[i]=maximum-minimum}reference=median(frames.slice(-3));referenceTarget=targetSignature(reference)||referenceTarget;lastScanFrame=reference.slice();previousScanFrame=reference.slice();knownHoles=[];candidateTrack=null;stableScanCount=0;status("Sabit referans kilitlendi; hızlı otomatik tarama çalışıyor.");const summary=$("sensorSummary");if(summary)summary.textContent="Algılama açık";$("sensorSetup")?.removeAttribute("open");scanTimer=setInterval(detect,SCAN_INTERVAL_MS)}catch(error){armed=false;status(`Sabitlik öğrenilemedi: ${error.message}`,true)}finally{busy=false}}
 function setAutomaticScanning(enabled){clearInterval(scanTimer);scanTimer=null;if(enabled)learnCameraNoise()}
 $("reference").onclick=async()=>{try{const data=await captureStable();reference=data.current;referenceTarget=targetSignature(reference);lastScanFrame=reference.slice();previousScanFrame=reference.slice();noiseFloor=null;knownHoles=[];candidateTrack=null;stableScanCount=0;if(!referenceTarget)throw Error("Siyah hedef alanı ölçülemedi. Hedefi kadrajda büyüt ve köşeleri yeniden seç.");wctx.putImageData(data.preview,0,0);$("arm").disabled=false;$("test").disabled=false;status(`Temiz referans kilitlendi · siyah çap ${(referenceTarget.radius*2).toFixed(1)} px · kenar gücü ${referenceTarget.edgeContrast.toFixed(0)}.`)}catch(e){reference=null;referenceTarget=null;lastScanFrame=null;previousScanFrame=null;noiseFloor=null;knownHoles=[];candidateTrack=null;stableScanCount=0;status(e.message,true)}};
